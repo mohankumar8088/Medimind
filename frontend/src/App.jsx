@@ -7,7 +7,24 @@ const nav = [
   { group: 'WORKSPACE', items: [{ id: 'overview', label: 'Overview', icon: LayoutDashboard }, { id: 'reports', label: 'Report explainer', icon: FileText }, { id: 'research', label: 'Research assistant', icon: FlaskConical }, { id: 'consultations', label: 'Consultation notes', icon: AudioLines }] },
   { group: 'YOUR LIBRARY', items: [{ id: 'library', label: 'Saved reports', icon: ClipboardList }] },
 ]
-async function api(path, body, method = 'POST') { const opts = { method, credentials: 'include' }; if (body instanceof FormData) opts.body = body; else if (body !== undefined) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body) } const r = await fetch(path, opts); const data = r.status === 204 ? {} : await r.json(); if (!r.ok) throw new Error(data.detail || 'Something went wrong. Please try again.'); return data }
+async function api(path, body, method = 'POST') {
+  const opts = { method, credentials: 'include' }
+  if (body instanceof FormData) opts.body = body
+  else if (body !== undefined) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body) }
+  const response = await fetch(path, opts)
+  const text = response.status === 204 ? '' : await response.text()
+  let data = {}
+  if (text) {
+    try { data = JSON.parse(text) }
+    catch {
+      const message = text.trim().slice(0, 300) || response.statusText
+      if (!response.ok) throw new Error(`Server error (${response.status}): ${message}`)
+      throw new Error(`Server returned an invalid response (${response.status}): ${message}`)
+    }
+  }
+  if (!response.ok) throw new Error(data.detail || data.message || `Request failed (${response.status}).`)
+  return data
+}
 
 export default function App() {
   const [page, setPage] = useState('overview'), [report, setReport] = useState(''), [reportName, setReportName] = useState(''), [recordId, setRecordId] = useState(''), [report2, setReport2] = useState(''), [values, setValues] = useState([]), [result, setResult] = useState(''), [demo, setDemo] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [question, setQuestion] = useState(''), [query, setQuery] = useState(''), [articles, setArticles] = useState([]), [transcript, setTranscript] = useState(''), [answer, setAnswer] = useState(''), [tab, setTab] = useState('patient'), [mobileOpen, setMobileOpen] = useState(false), [compareMode, setCompareMode] = useState(false), [user, setUser] = useState(null), [authChecking, setAuthChecking] = useState(true), [authMode, setAuthMode] = useState('signin'), [authError, setAuthError] = useState(''), [savedRecords, setSavedRecords] = useState([]), [saveNotice, setSaveNotice] = useState('')

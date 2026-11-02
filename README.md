@@ -19,6 +19,7 @@ A beginner-friendly healthcare report assistant built with React, FastAPI, Mongo
 medimind-ai/
 ├── backend/
 │   ├── app/main.py          # API routes, upload validation, extraction
+│   ├── .python-version      # Python runtime for the Vercel backend service
 │   ├── requirements.txt
 │   └── .env.example
 ├── requirements.txt         # Root-level Python dependency include
