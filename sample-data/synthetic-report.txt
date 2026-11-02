@@ -1,0 +1,7 @@
+SYNTHETIC DEMO DATA — NOT A REAL PATIENT
+Complete blood count (demo)
+Hemoglobin: 13.4 g/dL
+White blood cell count: 6.2 x10^9/L
+Platelets: 245 x10^9/L
+Example collection date: 2026-10-20
+This example has no laboratory reference ranges and must not guide care.

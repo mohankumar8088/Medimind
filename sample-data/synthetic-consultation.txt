@@ -1,0 +1,5 @@
+SYNTHETIC DEMO DATA — NOT A REAL PATIENT
+Clinician: How have you been feeling?
+Patient: I have had a mild headache for two days. I have not taken any medicine yet.
+Clinician: We discussed tracking symptoms and arranging a follow-up next week if they continue. Please contact the clinic if you have questions.
+Patient: I understand.
