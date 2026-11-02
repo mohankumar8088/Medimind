@@ -5,7 +5,7 @@ A beginner-friendly healthcare report assistant built with React, FastAPI, Mongo
 ## What works in this starter
 
 - Email/password sign-up and sign-in. Passwords are Argon2 hashed; the browser receives an HTTP-only session cookie.
-- Upload PDF, PNG, or JPEG reports (maximum 4 MB, leaving room under Vercel's function request limit). Text PDFs are extracted; image OCR is attempted if Tesseract is installed. Extracted report text and generated content are saved to the signed-in user's MongoDB Atlas account; raw file bytes are not saved.
+- Upload PDF, PNG, or JPEG reports (maximum 4 MB, leaving room under Vercel's function request limit). Text PDFs are extracted by the API; PNG/JPEG text is recognized locally in the browser with Tesseract.js. Only extracted text is sent to the API and saved to the signed-in user's MongoDB Atlas account; image bytes are not uploaded for OCR.
 - Review a report explanation at patient, student, and clinician levels. With `GEMINI_API_KEY`, Gemini drafts the explanation; without it, a clearly labeled safe demo explanation is returned.
 - Ask questions against the extracted text and compare two reports. Reports, explanations, Q&A history, comparisons, research searches, and saved consultation drafts are stored under the signed-in account.
 - Search PubMed for literature matching a research question and return source links. This is literature discovery, not a diagnosis or probability-ranked differential.
@@ -64,7 +64,7 @@ Use a MongoDB Atlas database user restricted to the MediMind database and its re
 uvicorn app.main:app --reload
 ```
 
-Optional image OCR requires the Tesseract program installed and available on PATH. The API health page is at http://127.0.0.1:8000/health and interactive API docs at http://127.0.0.1:8000/docs.
+PNG/JPEG OCR runs locally in the browser. OCR for scanned PDFs on the backend requires the Tesseract program installed and available on PATH. The API health page is at http://127.0.0.1:8000/health and interactive API docs at http://127.0.0.1:8000/docs.
 
 ### 2. Start the website
 
