@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -13,11 +14,12 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, Up
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pymongo import ASCENDING, DESCENDING, MongoClient
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from pwdlib import PasswordHash
 
 load_dotenv()
 app = FastAPI(title="MediMind AI API", version="0.2.0", description="Educational health information drafts; clinician review required.")
+logger = logging.getLogger(__name__)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type"])
 MAX_BYTES = 4 * 1024 * 1024  # Leave room below Vercel's 4.5 MB function request limit.
 ALLOWED = {"application/pdf", "image/png", "image/jpeg"}
@@ -119,14 +121,20 @@ def safe_demo(label: str) -> str:
     return f"Demo draft ({label}): Connect a Gemini API key to generate a document-specific explanation. Always verify values and interpretation with a qualified healthcare professional."
 
 
-def database():
-    global mongo_client, mongo_indexes_ready
+def get_mongo_client() -> MongoClient:
+    global mongo_client
     uri = os.getenv("MONGODB_URI")
     if not uri:
         raise HTTPException(503, "Database is not configured. Add MONGODB_URI to the server environment.")
     if mongo_client is None:
         mongo_client = MongoClient(uri, serverSelectionTimeoutMS=8000, maxPoolSize=20, tz_aware=True)
-    db = mongo_client[os.getenv("MONGODB_DATABASE", "medimind")]
+    return mongo_client
+
+
+def database():
+    global mongo_indexes_ready
+    client = get_mongo_client()
+    db = client[os.getenv("MONGODB_DATABASE", "medimind")]
     if not mongo_indexes_ready:
         db.users.create_index([("email", ASCENDING)], unique=True)
         db.records.create_index([("owner_id", ASCENDING), ("created_at", DESCENDING)])
@@ -199,7 +207,15 @@ def extract_values(text: str) -> list[dict[str, str]]:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "gemini_configured": bool(os.getenv("GEMINI_API_KEY")), "database_configured": bool(os.getenv("MONGODB_URI")), "limits": {"upload_mb": 4}}
+    database_configured = bool(os.getenv("MONGODB_URI"))
+    database_connected = False
+    if database_configured:
+        try:
+            get_mongo_client().admin.command("ping")
+            database_connected = True
+        except PyMongoError:
+            logger.exception("MongoDB health check failed")
+    return {"status": "ok", "gemini_configured": bool(os.getenv("GEMINI_API_KEY")), "database_configured": database_configured, "database_connected": database_connected, "limits": {"upload_mb": 4}}
 
 
 @app.post("/api/auth/signup")
@@ -212,6 +228,9 @@ def sign_up(req: SignUpRequest, response: Response):
         result = database().users.insert_one(user)
     except DuplicateKeyError:
         raise HTTPException(409, "An account already exists for this email.")
+    except PyMongoError:
+        logger.exception("MongoDB operation failed during signup")
+        raise HTTPException(503, "MongoDB is unavailable. Verify the Atlas URI, database user permissions, and network access.")
     user["_id"] = result.inserted_id
     set_session(response, result.inserted_id)
     return {"user": public_user(user)}
