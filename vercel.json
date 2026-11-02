@@ -3,6 +3,6 @@
   "framework": null,
   "buildCommand": "npm --prefix frontend install --no-audit --no-fund && npm --prefix frontend run build",
   "functions": {
-    "index.py": { "maxDuration": 60 }
+    "api/index.py": { "maxDuration": 60 }
   }
 }
