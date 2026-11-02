@@ -21,10 +21,8 @@ medimind-ai/
 │   ├── app/main.py          # API routes, upload validation, extraction
 │   ├── requirements.txt
 │   └── .env.example
-├── api/
-│   └── index.py             # Vercel FastAPI entrypoint
-├── requirements.txt         # Vercel Python dependencies
-├── vercel.json              # Builds frontend assets for Vercel
+├── requirements.txt         # Root-level Python dependency include
+├── vercel.json              # Vercel backend/frontend services and routing
 ├── frontend/
 │   ├── src/App.jsx          # Dashboard and module screens
 │   ├── src/main.jsx
@@ -85,10 +83,15 @@ Add `GEMINI_API_KEY=your_key` and optionally `GEMINI_MODEL=gemini-2.5-flash` to 
 
 ## Deploy on Vercel
 
-This repository is prepared for one Vercel project: the React build is emitted into `public/`, while `api/index.py` exposes FastAPI routes on the same origin. This keeps the session cookie same-origin.
+This repository uses two Vercel services under one project and domain:
+
+- `backend` uses the FastAPI app at `backend/app/main.py`. It receives public `/api/*` and `/health` requests.
+- `frontend` uses the Vite app in `frontend/`. It receives `/` and all remaining paths.
+
+The browser calls the API through same-origin `/api/*` URLs, so the session cookie remains same-origin. There are no backend-to-frontend service calls, so no service bindings are needed. Vercel builds each service from its configured root in `vercel.json`.
 
 1. Push this repository to GitHub, then in Vercel select **Add New → Project** and import `mohankumar8088/Medimind`.
-2. Set **Root Directory** to `.` (the repository root). Keep the included `vercel.json` build configuration; it builds the frontend and configures the `api/index.py` Python function.
+2. Set **Root Directory** to `.` (the repository root). The included `vercel.json` configures the `backend` and `frontend` services and their public routes; do not override the service build settings.
 3. In **Project Settings → Environment Variables**, set `MONGODB_URI`, `MONGODB_DATABASE` (for example, `medimind`), and a fresh, random `JWT_SECRET_KEY`. Add `GEMINI_API_KEY` and `GEMINI_MODEL` only if Gemini is enabled. Select the environments where each variable is needed; never commit secrets.
 4. Ensure MongoDB Atlas permits connections from the deployment, then deploy. Check `https://<your-domain>/health` and test sign-up, uploads, and saved records with synthetic data.
 
