@@ -87,11 +87,10 @@ Add `GEMINI_API_KEY=your_key` and optionally `GEMINI_MODEL=gemini-2.5-flash` to 
 
 This repository is prepared for one Vercel project: the React build is emitted into `public/`, while `api/index.py` exposes FastAPI routes on the same origin. This keeps the session cookie same-origin.
 
-1. Put the `medimind-ai` folder in a Git repository and push it to GitHub, GitLab, or Bitbucket.
-2. In Vercel, import that repository. Set the project root to `medimind-ai` if the folder is inside a larger repository. The included `vercel.json` runs the frontend build; the Python runtime loads `api/index.py`.
-3. In Vercel Project Settings → Environment Variables, add `MONGODB_URI`, `MONGODB_DATABASE` (for example, `medimind`), and a fresh random `JWT_SECRET_KEY`. Add `GEMINI_API_KEY` and `GEMINI_MODEL` if Gemini is enabled. Add them to Preview and Production only as appropriate.
-4. Confirm Atlas network access allows Vercel's outbound connection and deploy. Check `/health` on the deployed domain; it reports whether the database and Gemini settings are present, without exposing secret values.
-5. Open the deployed site and create an account. Confirm uploads, the saved library, and deletion work with synthetic data before considering any sensitive content.
+1. Push this repository to GitHub, then in Vercel select **Add New → Project** and import `mohankumar8088/Medimind`.
+2. Set **Root Directory** to `.` (the repository root). Keep the included `vercel.json` build configuration; it builds the frontend and configures the `api/index.py` Python function.
+3. In **Project Settings → Environment Variables**, set `MONGODB_URI`, `MONGODB_DATABASE` (for example, `medimind`), and a fresh, random `JWT_SECRET_KEY`. Add `GEMINI_API_KEY` and `GEMINI_MODEL` only if Gemini is enabled. Select the environments where each variable is needed; never commit secrets.
+4. Ensure MongoDB Atlas permits connections from the deployment, then deploy. Check `https://<your-domain>/health` and test sign-up, uploads, and saved records with synthetic data.
 
 Local development and Vercel deployment use the same FastAPI routes. In local development, Vite proxies `/api` to `http://127.0.0.1:8000`; set `COOKIE_SECURE=false` in `backend/.env` for localhost if needed. In Vercel, the session cookie is automatically marked Secure.
 
