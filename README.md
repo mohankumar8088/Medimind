@@ -9,6 +9,7 @@ A beginner-friendly healthcare report assistant built with React, FastAPI, Mongo
 - Review a report explanation at patient, student, and clinician levels. With `GEMINI_API_KEY`, Gemini drafts the explanation; without it, a clearly labeled safe demo explanation is returned.
 - Ask questions against the extracted text and compare two reports. Reports, explanations, Q&A history, comparisons, research searches, and saved consultation drafts are stored under the signed-in account.
 - Search PubMed for literature matching a research question and return source links. This is literature discovery, not a diagnosis or probability-ranked differential.
+- Run an exploratory rare-disease literature review from a saved report: Gemini extracts explicit report features, PubMed returns related article abstracts, and Gemini drafts unranked, citation-linked research leads and clinician questions. This is not a diagnostic model and may return no candidates.
 - Generate doctor and patient summary drafts from pasted consultation text, review them, then save to the library. Audio transcription is an explicitly staged integration: this starter does not record or transcribe audio.
 - View and delete saved items, or delete the account and all its saved records.
 - Synthetic report data and an example consultation transcript for trying the interface.
@@ -100,9 +101,9 @@ Local development and Vercel deployment use the same FastAPI routes. In local de
 
 ## Build stages
 
-1. **Foundation in this starter:** sign-in/sign-up, per-account MongoDB records, password hashing, HTTP-only sessions, account and item deletion, dashboard, report upload/text extraction, three-level drafts, report comparison/Q&A, PubMed article lookup, and consultation text summary drafts.
+1. **Foundation in this starter:** sign-in/sign-up, per-account MongoDB records, password hashing, HTTP-only sessions, account and item deletion, dashboard, report upload/text extraction, three-level drafts, report comparison/Q&A, PubMed article lookup, report-based rare-disease literature review drafts, and consultation text summary drafts.
 2. **Next:** password reset and email verification, rate limiting, audit logging, stronger access controls, backup/retention settings, and a security review.
 3. **Then:** verified OCR pipeline for scanned PDFs, structured extraction with reference ranges/units and provenance, stronger evaluation and clinician feedback.
 4. **Then:** consented audio capture and transcription, language selection, medication/follow-up extraction with human review, and production-grade literature retrieval.
 
-This starter does not include password reset, email verification, rate limiting, audio recording/transcription, diagnosis prediction, prescribing, client-side encryption, or production security certification. Atlas stores extracted medical text and summaries, so use synthetic data until the deployment's privacy, consent, retention, access-control, regulatory, and vendor requirements have been reviewed. Do not treat this code as proof of HIPAA or other healthcare-regulatory compliance.
+This starter does not include password reset, email verification, rate limiting, audio recording/transcription, validated phenotype matching, genetic analysis, a clinically validated differential, diagnosis, prescribing, client-side encryption, or production security certification. The rare-disease feature is an exploratory literature review generated from report-derived terms and PubMed abstracts; candidate conditions must appear in cited source text and still may be irrelevant to an individual. Atlas stores extracted medical text and summaries, and selected report features are sent to Gemini, so use synthetic data until the deployment's privacy, consent, retention, access-control, regulatory, and vendor requirements have been reviewed. Do not treat this code as proof of HIPAA or other healthcare-regulatory compliance.
