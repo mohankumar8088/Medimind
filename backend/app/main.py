@@ -395,27 +395,71 @@ def compare(req: CompareRequest, user: CurrentUser):
     return {"comparison": result or safe_demo("report comparison"), "demo": result is None}
 
 
-@app.post("/api/research/search")
-async def research(req: ResearchRequest, user: CurrentUser):
-    params = {"db": "pubmed", "term": req.query, "retmax": 6, "retmode": "json", "sort": "relevance"}
+async def search_pubmed(query: str, limit: int) -> tuple[list[dict[str, str]], str]:
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-            response = await client.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params)
+            response = await client.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                params={"db": "pubmed", "term": query, "retmax": limit, "retmode": "json", "sort": "relevance"},
+            )
             response.raise_for_status()
             ids = response.json().get("esearchresult", {}).get("idlist", [])
             articles = []
             if ids:
-                summary = await client.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params={"db": "pubmed", "id": ",".join(ids), "retmode": "json"})
+                summary = await client.get(
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                    params={"db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+                )
                 summary.raise_for_status()
                 records = summary.json().get("result", {})
                 for pmid in ids:
-                    rec = records.get(pmid, {})
-                    articles.append({"title": rec.get("title", "Untitled record"), "year": rec.get("pubdate", "")[:4], "journal": rec.get("fulljournalname", ""), "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"})
-            notice = "Literature search results for professional review; not a diagnosis or recommendation."
-            insert_record(user, {"type": "research", "name": f"Literature search: {req.query[:150]}", "query": req.query, "articles": articles})
-            return {"articles": articles, "source": "PubMed", "notice": notice}
-    except Exception:
+                    record = records.get(pmid, {})
+                    articles.append({
+                        "title": record.get("title", "Untitled record"),
+                        "year": record.get("pubdate", "")[:4],
+                        "journal": record.get("fulljournalname", ""),
+                        "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                    })
+        return articles, "PubMed"
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("PubMed E-utilities unavailable; trying Europe PMC (%s)", type(exc).__name__)
+
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            response = await client.get(
+                "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                params={
+                    "query": f"({query}) AND SRC:MED",
+                    "format": "json",
+                    "pageSize": limit,
+                    "resultType": "core",
+                },
+            )
+            response.raise_for_status()
+            results = response.json().get("resultList", {}).get("result", [])
+            articles = []
+            for record in results:
+                pmid = str(record.get("pmid", ""))
+                if not pmid:
+                    continue
+                articles.append({
+                    "title": str(record.get("title") or "Untitled record"),
+                    "year": str(record.get("firstPublicationDate") or "")[:4],
+                    "journal": str(record.get("journalTitle") or ""),
+                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                })
+        return articles, "PubMed via Europe PMC"
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        logger.exception("PubMed and Europe PMC literature searches failed")
         raise HTTPException(502, "PubMed search is temporarily unavailable. Try again later.")
+
+
+@app.post("/api/research/search")
+async def research(req: ResearchRequest, user: CurrentUser):
+    articles, source = await search_pubmed(req.query, 6)
+    notice = f"Literature search results from {source} for professional review; not a diagnosis or recommendation."
+    insert_record(user, {"type": "research", "name": f"Literature search: {req.query[:150]}", "query": req.query, "articles": articles})
+    return {"articles": articles, "source": source, "notice": notice}
 
 
 def parse_model_json(prompt: str) -> dict:

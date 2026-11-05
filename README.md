@@ -5,10 +5,10 @@ A beginner-friendly healthcare report assistant built with React, FastAPI, Mongo
 ## What works in this starter
 
 - Email/password sign-up and sign-in. Passwords are Argon2 hashed; the browser receives an HTTP-only session cookie.
-- Upload PDF, PNG, or JPEG reports (maximum 4 MB, leaving room under Vercel's function request limit). Text PDFs are extracted by the API; PNG/JPEG text is recognized locally in the browser with Tesseract.js. Only extracted text is sent to the API and saved to the signed-in user's MongoDB Atlas account; image bytes are not uploaded for OCR.
+- Upload PDF, PNG, or JPEG reports (maximum 4 MB). PDF text extraction and OCR for scanned PDF pages run locally in the browser with PDF.js and Tesseract.js; PNG/JPEG OCR also runs locally. Only extracted text is sent to the API and saved to the signed-in user's MongoDB Atlas account; report files are not uploaded for OCR.
 - Review a report explanation at patient, student, and clinician levels. With `GEMINI_API_KEY`, Gemini drafts the explanation; without it, a clearly labeled safe demo explanation is returned.
 - Ask questions against the extracted text and compare two reports. Reports, explanations, Q&A history, comparisons, research searches, and saved consultation drafts are stored under the signed-in account.
-- Search PubMed for literature matching a research question and return source links. This is literature discovery, not a diagnosis or probability-ranked differential.
+- Search PubMed for literature matching a research question and return source links. If NCBI E-utilities is unavailable, the API falls back to PubMed-indexed records from Europe PMC. This is literature discovery, not a diagnosis or probability-ranked differential.
 - Run an exploratory rare-disease literature review from a saved report: Gemini extracts explicit report features, PubMed returns related article abstracts, and Gemini drafts unranked, citation-linked research leads and clinician questions. This is not a diagnostic model and may return no candidates.
 - Generate doctor and patient summary drafts from pasted consultation text, review them, then save to the library. Audio transcription is an explicitly staged integration: this starter does not record or transcribe audio.
 - View and delete saved items, or delete the account and all its saved records.
@@ -65,7 +65,7 @@ Use a MongoDB Atlas database user restricted to the MediMind database and its re
 uvicorn app.main:app --reload
 ```
 
-PNG/JPEG OCR runs locally in the browser. OCR for scanned PDFs on the backend requires the Tesseract program installed and available on PATH. The API health page is at http://127.0.0.1:8000/health and interactive API docs at http://127.0.0.1:8000/docs.
+PDF text extraction and scanned PDF OCR, as well as PNG/JPEG OCR, run locally in the browser. The API health page is at http://127.0.0.1:8000/health and interactive API docs at http://127.0.0.1:8000/docs.
 
 ### 2. Start the website
 
