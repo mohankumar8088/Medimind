@@ -81,7 +81,7 @@ Open the local URL Vite prints (usually http://localhost:5173). The Vite develop
 
 ### 3. Enable Gemini (optional)
 
-Add `GEMINI_API_KEY=your_key` and optionally `GEMINI_MODEL=gemini-2.5-flash` to `backend/.env`, then restart FastAPI. Never put provider keys in frontend code or commit `.env`. Without a key, report explanations and consultation summaries use labeled demo drafts; report Q&A asks users to configure Gemini. Do not send identifiable patient information to a third-party model without appropriate consent, legal basis, and an approved privacy arrangement.
+Add `GEMINI_API_KEY=your_key` and optionally `GEMINI_MODEL=gemini-3.6-flash` to `backend/.env`, then restart FastAPI. Never put provider keys in frontend code or commit `.env`. Without a key, report explanations and consultation summaries use labeled demo drafts; report Q&A asks users to configure Gemini. Do not send identifiable patient information to a third-party model without appropriate consent, legal basis, and an approved privacy arrangement.
 
 ## Deploy on Vercel
 
