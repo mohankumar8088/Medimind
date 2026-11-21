@@ -82,6 +82,11 @@ async def current_user(creds: HTTPAuthorizationCredentials | None = Depends(secu
     if not user: raise HTTPException(401, "Account not found.")
     return user
 
+async def patient_user(user=Depends(current_user)):
+    if user.get("role") != "patient":
+        raise HTTPException(403, "This feature is available to patient accounts only.")
+    return user
+
 def oid(value: str) -> ObjectId:
     if not ObjectId.is_valid(value): raise HTTPException(404, "Item not found.")
     return ObjectId(value)
@@ -227,7 +232,10 @@ async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperatur
 
 @app.post("/api/companion/chat")
 async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
-    del user  # Authentication is required; assistant conversations are deliberately not stored.
+    doctor_scope = user.get("role") == "doctor"
+    allowed_sections = {"care"} if doctor_scope else {"reports", "timeline", "research", "medications", "emergency", "care"}
+    allowed_guides = {key for key, section in COMPANION_GUIDES.items() if section in allowed_sections and not (doctor_scope and key == "care_conversation")}
+    allowed_fields = {key for key, (section, _) in COMPANION_FIELDS.items() if section in allowed_sections and not (doctor_scope and key == "doctor_username")}
     medical_advice_patterns = (
         r"\bdiagnos\w*\b", r"\b(?:treat|treatment|medication|medicine|dosage|dose|cure)\b",
         r"\bwhat (?:disease|condition) do i have\b",
@@ -236,20 +244,21 @@ async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
     )
     if any(re.search(pattern, payload.message, re.IGNORECASE) for pattern in medical_advice_patterns):
         return {
-            "message": "I can guide you through MediMind, but I can’t interpret medical results or recommend care. Open My Reports for the report explanation, and discuss personal medical questions with a qualified clinician.",
+            "message": "I can help with MediMind navigation, but I can’t interpret medical results or recommend care. Please use qualified clinical judgment for patient-specific questions.",
             "action": "ANSWER", "section": None, "guide_id": None, "field_id": None,
         }
     language_name = {"en-IN": "English", "hi-IN": "Hindi", "kn-IN": "Kannada", "te-IN": "Telugu", "ta-IN": "Tamil"}[payload.language]
-    prompt = f"""You are MediMind Companion, a friendly guide to using the MediMind website. Reply in {language_name}.
+    role_scope = "This doctor account can use only Care Conversations. Do not direct it to patient report, research, medication, timeline, or emergency modules." if doctor_scope else "Help the patient use their available MediMind modules."
+    prompt = f"""You are MediMind Companion, a friendly guide to using the MediMind website. Reply in {language_name}. {role_scope}
 Answer questions about website navigation and form fields only. Do not interpret medical reports, diagnose, estimate disease likelihood, or recommend treatment. If asked for medical advice, explain that this assistant only guides website use and point the user to their report explanation or a qualified clinician.
 The user is on page: {payload.current_page}. Mode: {payload.mode}. User request: {payload.message}
 Return a JSON object only with keys: message, action, section, guide_id, field_id.
-action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. section must be reports, timeline, research, medications, emergency, care, or null.
-Allowed guide_id values: upload_report, understand_report, explore_research, health_timeline, medication_plan, emergency_profile, care_conversation.
-Allowed field_id values: report_upload, report_question, research_report, research_question, medication_upload, medication_name, emergency_profile, emergency_share, doctor_username, care_message.
+action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. Choose a section only from this allowed set: {', '.join(sorted(allowed_sections))}.
+Allowed guide_id values: {', '.join(sorted(allowed_guides))}.
+Allowed field_id values: {', '.join(sorted(allowed_fields))}.
 Use NAVIGATE when the user asks to open a module. Use GUIDE when the user wants a step-by-step tour; choose only a guide_id that matches an existing module. Use FIELD_HELP when they ask what to enter in a known field; your message should explain the expected input and give a non-medical example if useful. Otherwise use ANSWER.
 When mode is guide, prefer GUIDE for a workflow request. Never claim to have uploaded, submitted, shared, deleted, or changed any data. Never generate code or arbitrary browser actions. Keep message under 600 characters.
-Available field descriptions: {json.dumps({key: value[1] for key, value in COMPANION_FIELDS.items()})}
+Available field descriptions: {json.dumps({key: value[1] for key, value in COMPANION_FIELDS.items() if key in allowed_fields})}
 Return only JSON."""
     raw = await gemini(prompt, temperature=0.2, json_mode=True)
     try:
@@ -263,9 +272,9 @@ Return only JSON."""
     section_value = data.get("section")
     guide_value = data.get("guide_id")
     field_value = data.get("field_id")
-    section = section_value if isinstance(section_value, str) and section_value in {"reports", "timeline", "research", "medications", "emergency", "care"} else None
-    guide_id = guide_value if isinstance(guide_value, str) and guide_value in COMPANION_GUIDES else None
-    field_id = field_value if isinstance(field_value, str) and field_value in COMPANION_FIELDS else None
+    section = section_value if isinstance(section_value, str) and section_value in allowed_sections else None
+    guide_id = guide_value if isinstance(guide_value, str) and guide_value in allowed_guides else None
+    field_id = field_value if isinstance(field_value, str) and field_value in allowed_fields else None
     if action == "GUIDE" and guide_id:
         section = COMPANION_GUIDES[guide_id]
         field_id = None
@@ -297,7 +306,7 @@ async def explain_report(extracted: str) -> str:
     return await gemini("You help patients understand their own medical paperwork. Explain the report in plain, calm, non-alarming language. Organize with short headings: What this report is; Key results (distinguish in-range/out-of-range only when reference ranges are shown); What it may mean; Helpful questions for a clinician. Define jargon. Do not diagnose, infer missing context, recommend treatment, or imply certainty. If data is unclear, say so. Include a brief reminder to review with a healthcare professional.\n\nREPORT TEXT:\n" + extracted[:30000])
 
 @app.post("/api/reports")
-async def create_report(file: UploadFile = File(...), user=Depends(current_user)):
+async def create_report(file: UploadFile = File(...), user=Depends(patient_user)):
     content = await file.read(MAX_UPLOAD + 1)
     if len(content) > MAX_UPLOAD: raise HTTPException(413, f"Files must be {MAX_UPLOAD // 1024 // 1024} MB or smaller.")
     mime = file.content_type or "application/octet-stream"
@@ -314,18 +323,18 @@ def report_out(doc):
     return {"_id": str(doc["_id"]), "filename": doc["filename"], "file_type": doc.get("file_type"), "created_at": doc["created_at"], "extracted_text": doc.get("extracted_text", ""), "explanation": doc.get("explanation", "")}
 
 @app.get("/api/reports")
-async def list_reports(user=Depends(current_user)):
+async def list_reports(user=Depends(patient_user)):
     cursor = database().reports.find({"owner_id": user["_id"]}, {"extracted_text": 0, "explanation": 0}).sort("created_at", -1).limit(100)
     return [{"_id": str(r["_id"]), "filename": r["filename"], "file_type": r.get("file_type"), "created_at": r["created_at"]} async for r in cursor]
 
 @app.get("/api/reports/{report_id}")
-async def get_report(report_id: str, user=Depends(current_user)):
+async def get_report(report_id: str, user=Depends(patient_user)):
     report = await database().reports.find_one({"_id": oid(report_id), "owner_id": user["_id"]})
     if not report: raise HTTPException(404, "Report not found.")
     return report_out(report)
 
 @app.get("/api/reports/{report_id}/file")
-async def download_report(report_id: str, user=Depends(current_user)):
+async def download_report(report_id: str, user=Depends(patient_user)):
     report = await database().reports.find_one({"_id": oid(report_id), "owner_id": user["_id"]})
     if not report or fs is None: raise HTTPException(404, "Report not found.")
     from fastapi.responses import StreamingResponse
@@ -335,7 +344,7 @@ async def download_report(report_id: str, user=Depends(current_user)):
     return StreamingResponse(gridout, media_type=report.get("file_type", "application/octet-stream"), headers=headers)
 
 @app.post("/api/reports/{report_id}/chat")
-async def report_chat(report_id: str, payload: ChatIn, user=Depends(current_user)):
+async def report_chat(report_id: str, payload: ChatIn, user=Depends(patient_user)):
     report = await database().reports.find_one({"_id": oid(report_id), "owner_id": user["_id"]})
     if not report: raise HTTPException(404, "Report not found.")
     answer = await gemini("Answer the patient's question using only the report context below. Use plain language, acknowledge uncertainty, do not diagnose or recommend treatment, and encourage clinician review when appropriate.\nREPORT:\n" + report.get("extracted_text", "")[:18000] + "\nQUESTION:\n" + payload.message)
@@ -359,7 +368,7 @@ async def pubmed_search(query: str) -> list[dict[str, str]]:
         return articles
 
 @app.post("/api/research/rare-disease")
-async def rare_research(payload: ResearchIn, user=Depends(current_user)):
+async def rare_research(payload: ResearchIn, user=Depends(patient_user)):
     if payload.report_id:
         report = await database().reports.find_one({"_id": oid(payload.report_id), "owner_id": user["_id"]})
         if not report: raise HTTPException(404, "Report not found.")
@@ -386,12 +395,12 @@ async def rare_research(payload: ResearchIn, user=Depends(current_user)):
     return {"query": query, "summary": summary, "possibilities": possibilities, "articles": articles, "disclaimer": "Research leads are not diagnosis."}
 
 @app.post("/api/research/chat")
-async def research_chat(payload: ResearchChatIn, user=Depends(current_user)):
+async def research_chat(payload: ResearchChatIn, user=Depends(patient_user)):
     answer = await gemini("Explain this medical literature summary in plain language. Do not diagnose or overstate evidence.\nSUMMARY:\n" + payload.context + "\nQUESTION:\n" + payload.question)
     return {"answer": answer}
 
 @app.post("/api/health/twin")
-async def build_health_twin(user=Depends(current_user)):
+async def build_health_twin(user=Depends(patient_user)):
     cursor = database().reports.find({"owner_id": user["_id"]}).sort("created_at", -1).limit(20)
     reports = [r async for r in cursor]
     if not reports: raise HTTPException(422, "Upload a report first to build your health timeline.")
@@ -413,24 +422,24 @@ async def build_health_twin(user=Depends(current_user)):
     return {"summary": summary, "timeline": timeline, "observations": observations, "disclaimer": "This timeline organizes records; it does not diagnose or recommend care."}
 
 @app.get("/api/medications")
-async def list_medications(user=Depends(current_user)):
+async def list_medications(user=Depends(patient_user)):
     cursor = database().medications.find({"owner_id": user["_id"]}).sort("created_at", -1).limit(100)
     return [{"_id": str(m["_id"]), "name": m["name"], "dose": m.get("dose", ""), "frequency": m.get("frequency", ""), "times": m.get("times", []), "instructions": m.get("instructions", ""), "created_at": m["created_at"].isoformat()} async for m in cursor]
 
 @app.post("/api/medications")
-async def add_medication(payload: MedicationIn, user=Depends(current_user)):
+async def add_medication(payload: MedicationIn, user=Depends(patient_user)):
     doc = {"owner_id": user["_id"], **payload.model_dump(), "created_at": datetime.now(timezone.utc)}
     result = await database().medications.insert_one(doc)
     return {"_id": str(result.inserted_id), **payload.model_dump(), "created_at": doc["created_at"].isoformat()}
 
 @app.delete("/api/medications/{medication_id}")
-async def delete_medication(medication_id: str, user=Depends(current_user)):
+async def delete_medication(medication_id: str, user=Depends(patient_user)):
     result = await database().medications.delete_one({"_id": oid(medication_id), "owner_id": user["_id"]})
     if not result.deleted_count: raise HTTPException(404, "Medication not found.")
     return {"deleted": True}
 
 @app.post("/api/medications/scan")
-async def scan_prescription(file: UploadFile = File(...), user=Depends(current_user)):
+async def scan_prescription(file: UploadFile = File(...), user=Depends(patient_user)):
     del user
     content = await file.read(MAX_UPLOAD + 1)
     if len(content) > MAX_UPLOAD: raise HTTPException(413, f"Files must be {MAX_UPLOAD // 1024 // 1024} MB or smaller.")
@@ -444,7 +453,7 @@ async def scan_prescription(file: UploadFile = File(...), user=Depends(current_u
     return {"medications": candidates, "notice": "Review every extracted detail against the original prescription before saving. MediMind does not recommend medication or dosage changes."}
 
 @app.get("/api/emergency/profile")
-async def get_emergency_profile(user=Depends(current_user)):
+async def get_emergency_profile(user=Depends(patient_user)):
     profile = await database().emergency_profiles.find_one({"owner_id": user["_id"]})
     if not profile: return {"display_name": "", "allergies": "", "conditions": "", "medications": "", "blood_group": "", "emergency_contact": "", "share_fields": [], "share_active": False}
     data = {k: profile.get(k, "") for k in ("display_name", "allergies", "conditions", "medications", "blood_group", "emergency_contact")}
@@ -455,14 +464,14 @@ async def get_emergency_profile(user=Depends(current_user)):
     return data
 
 @app.put("/api/emergency/profile")
-async def save_emergency_profile(payload: EmergencyProfileIn, user=Depends(current_user)):
+async def save_emergency_profile(payload: EmergencyProfileIn, user=Depends(patient_user)):
     if any(field not in EMERGENCY_FIELDS for field in payload.share_fields): raise HTTPException(422, "Unknown emergency sharing field.")
     values = payload.model_dump()
     await database().emergency_profiles.update_one({"owner_id": user["_id"]}, {"$set": {**values, "owner_id": user["_id"], "updated_at": datetime.now(timezone.utc)}, "$unset": {"public_share": ""}}, upsert=True)
     return {"saved": True}
 
 @app.post("/api/emergency/share")
-async def create_emergency_share(user=Depends(current_user)):
+async def create_emergency_share(user=Depends(patient_user)):
     profile = await database().emergency_profiles.find_one({"owner_id": user["_id"]})
     if not profile or not profile.get("share_fields"): raise HTTPException(422, "Choose at least one emergency detail to share and save your profile first.")
     token = secrets.token_urlsafe(32)
@@ -480,7 +489,7 @@ async def create_emergency_share(user=Depends(current_user)):
     return {"qr_image": qr_image, "expires_at": expires.isoformat(), "public_url": public_url}
 
 @app.post("/api/emergency/share/revoke")
-async def revoke_emergency_share(user=Depends(current_user)):
+async def revoke_emergency_share(user=Depends(patient_user)):
     await database().emergency_profiles.update_one({"owner_id": user["_id"]}, {"$unset": {"public_share": ""}})
     return {"revoked": True}
 

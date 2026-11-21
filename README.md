@@ -5,6 +5,7 @@ A React + FastAPI starter for a private patient health workspace. The project ha
 ## What is included
 
 - Email/username sign-in, password minimum of eight characters, and patient/doctor roles. Passwords are hashed; API access uses signed, expiring bearer tokens.
+- Doctor accounts open a care-only workspace; patient report, rare-research, health-timeline, medication, and emergency-profile APIs reject doctor-role requests.
 - PDF, image, DOCX, TXT, and CSV report intake. PDF text is extracted locally; scanned PDFs and images use Gemini to read the text. Files are stored in MongoDB Atlas GridFS and each report is tied to its owner.
 - Gemini explanations and report-specific Q&A, with plain-language prompts and reminders to review medical information with a clinician.
 - PubMed E-utilities search, article links, and cautious AI summaries. The research area describes possible topics for clinician discussion; it never labels its output as a diagnosis.

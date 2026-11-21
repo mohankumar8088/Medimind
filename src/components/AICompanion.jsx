@@ -60,7 +60,7 @@ function pageLabel(page) {
   return ({ reports: 'My reports', timeline:'Health timeline', research: 'Rare disease research', medications:'Medication plan', emergency:'Emergency profile', care: 'Care conversations' })[page] || 'MediMind';
 }
 
-export default function AICompanion({ page, token, onNavigate }) {
+export default function AICompanion({ page, role = 'patient', token, onNavigate }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('ask');
   const [language, setLanguage] = useState('en-IN');
@@ -150,16 +150,17 @@ export default function AICompanion({ page, token, onNavigate }) {
   };
 
   const handleAction = (reply) => {
-    if (reply.action === 'NAVIGATE' && ['reports', 'research', 'care'].includes(reply.section)) {
+    if (reply.action === 'NAVIGATE' && (role !== 'doctor' || reply.section === 'care') && ['reports', 'timeline', 'research', 'medications', 'emergency', 'care'].includes(reply.section)) {
       onNavigate(reply.section);
       return;
     }
-    if (reply.action === 'GUIDE' && GUIDES[reply.guide_id]) {
+    if (reply.action === 'GUIDE' && GUIDES[reply.guide_id] && (role !== 'doctor' || GUIDES[reply.guide_id].section === 'care' && reply.guide_id !== 'care_conversation')) {
       startGuide(reply.guide_id);
       return;
     }
     if (reply.action === 'FIELD_HELP' && FIELD_TARGETS[reply.field_id]) {
       const [section, target] = FIELD_TARGETS[reply.field_id];
+      if (role === 'doctor' && section !== 'care') return;
       setPendingField({ section, target, title: 'What to enter', message: reply.message });
       if (section !== page || reply.field_id === 'report_upload') onNavigate(section);
     }
@@ -231,7 +232,7 @@ export default function AICompanion({ page, token, onNavigate }) {
         {messages.map((entry, index) => <div key={`${index}-${entry.role}`} className={`companion-message ${entry.role}`}><div className="companion-bubble">{entry.text}</div>{entry.role==='assistant'&&<button className={`companion-speak ${speakingIndex===index?'active':''}`} type="button" aria-label={speakingIndex===index?'Stop speaking':'Hear response'} title={speakingIndex===index?'Stop speaking':'Hear response'} onClick={() => speakReply(entry.text,index)}>{speakingIndex===index?<VolumeX size={14}/>:<Volume2 size={14}/>}</button>}</div>)}
         {busy&&<div className="companion-typing"><span/><span/><span/> Thinking…</div>}
       </div>
-      {messages.length===1&&<div className="companion-suggestions"><span>Try asking</span>{suggestions.map(item=><button key={item} type="button" disabled={busy} onClick={() => sendMessage(item)}>{item}<ChevronDown size={12}/></button>)}</div>}
+      {messages.length===1&&<div className="companion-suggestions"><span>Try asking</span>{(role==='doctor'?['How do I open a patient conversation?','How do I send a message?']:suggestions).map(item=><button key={item} type="button" disabled={busy} onClick={() => sendMessage(item)}>{item}<ChevronDown size={12}/></button>)}</div>}
       {notice&&<div className="companion-notice" role="status">{notice}</div>}
       <div className="companion-privacy"><ShieldCheck size={13}/> Website help only. Don’t include personal health details.</div>
       <form className="companion-composer" onSubmit={event => { event.preventDefault(); sendMessage(); }}>

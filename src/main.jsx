@@ -19,7 +19,7 @@ function App() {
   const [token, setToken] = useState(() => localStorage.getItem('mm_token'));
   const activeToken = useRef(token);
   const [authMode, setAuthMode] = useState('signup');
-  const [section, setSection] = useState('reports');
+  const [section, setSection] = useState(() => { try { return JSON.parse(localStorage.getItem('mm_user'))?.role === 'doctor' ? 'care' : 'reports'; } catch { return 'reports'; } });
   const [reports, setReports] = useState([]);
   const [selected, setSelected] = useState(null);
   const [analysis, setAnalysis] = useState('');
@@ -28,11 +28,13 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const auth = async (data, mode) => {
     setError(''); setBusy(true);
-    try { const r = await fetch(`${API}/auth/${mode}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) }); const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'Could not sign in.'); localStorage.setItem('mm_token', j.access_token); localStorage.setItem('mm_user', JSON.stringify(j.user)); activeToken.current = j.access_token; setReports([]); setSelected(null); setAnalysis(''); setSection('reports'); setToken(j.access_token); setUser(j.user); }
+    try { const r = await fetch(`${API}/auth/${mode}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) }); const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'Could not sign in.'); localStorage.setItem('mm_token', j.access_token); localStorage.setItem('mm_user', JSON.stringify(j.user)); activeToken.current = j.access_token; setReports([]); setSelected(null); setAnalysis(''); setSection(j.user.role === 'doctor' ? 'care' : 'reports'); setToken(j.access_token); setUser(j.user); }
     catch (e) { setError(e.message); } finally { setBusy(false); }
   };
-  const logout = () => { activeToken.current = null; localStorage.removeItem('mm_token'); localStorage.removeItem('mm_user'); setUser(null); setToken(null); setReports([]); setSelected(null); setAnalysis(''); setBusy(false); setAuthMode('signin'); };
+  const logout = () => { activeToken.current = null; localStorage.removeItem('mm_token'); localStorage.removeItem('mm_user'); setUser(null); setToken(null); setReports([]); setSelected(null); setAnalysis(''); setSection('reports'); setBusy(false); setAuthMode('signin'); };
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const visibleModules = user?.role === 'doctor' ? modules.filter(module => module.id === 'care') : modules;
+  const activeSection = user?.role === 'doctor' ? 'care' : section;
   const upload = async file => {
     if (!file) return;
     if (!token) { setError('Sign in to securely save and review a report.'); return; }
@@ -44,7 +46,7 @@ function App() {
   const openReport = async item => { if (!item) { setSelected(null); setAnalysis(''); return; } setSelected(item); setAnalysis(item.explanation || ''); if (!token || item._id?.startsWith('sample')) return; const requestToken = token; setBusy(true); try { const r = await fetch(`${API}/reports/${item._id}`, {headers}); const j = await r.json(); if (activeToken.current === requestToken && r.ok) { setSelected(j); setAnalysis(j.explanation || ''); } } finally { if (activeToken.current === requestToken) setBusy(false); } };
   useEffect(() => {
     let active = true;
-    if (!token) {
+    if (!token || user?.role !== 'patient') {
       setReports([]);
       return () => { active = false; };
     }
@@ -65,30 +67,30 @@ function App() {
     };
     loadReports();
     return () => { active = false; };
-  }, [token]);
+  }, [token, user?.role]);
   if (emergencyToken) return <EmergencyPublicPage token={emergencyToken} />;
   if (!user) return <AuthScreen onAuth={auth} busy={busy} error={error} initialMode={authMode} />;
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark"><HeartPulse size={21}/></div><span>medi<span className="brand-light">mind</span></span><button className="mobile-close" onClick={()=>setMobileNav(false)}><X size={18}/></button></div>
       <div className="workspace-label">YOUR SPACE</div>
-      <nav>{modules.map(m=><button key={m.id} data-guide-target={`nav-${m.id}`} className={`nav-item ${section===m.id?'active':''}`} onClick={()=>{setSection(m.id);setSelected(null);setMobileNav(false);setError('');}}><m.icon size={19}/><span className="nav-copy"><b>{m.label}</b><small>{m.sub}</small></span>{section===m.id&&<span className="nav-dot"/>}</button>)}</nav>
+      <nav>{visibleModules.map(m=><button key={m.id} data-guide-target={`nav-${m.id}`} className={`nav-item ${activeSection===m.id?'active':''}`} onClick={()=>{setSection(m.id);setSelected(null);setMobileNav(false);setError('');}}><m.icon size={19}/><span className="nav-copy"><b>{m.label}</b><small>{m.sub}</small></span>{activeSection===m.id&&<span className="nav-dot"/>}</button>)}</nav>
       <div className="side-bottom"><div className="privacy-note"><ShieldCheck size={17}/><span>Your health information is private to your account.</span></div><button className="profile" onClick={logout}><div className="avatar">{user.username?.[0]?.toUpperCase() || 'M'}</div><span><b>{user.username}</b><small>{user.role === 'doctor'?'Care provider':'Patient account'}</small></span><LogOut size={16} className="logout"/></button></div>
     </aside>
     {mobileNav&&<button className="scrim" aria-label="Close menu" onClick={()=>setMobileNav(false)}/>}
-    <main className="main-area"><header className="topbar"><button className="menu-button" onClick={()=>setMobileNav(true)}><Menu size={20}/></button><div className="breadcrumb"><span>Workspace</span><span className="crumb-slash">/</span><b>{modules.find(m=>m.id===section)?.label}</b></div><div className="top-right"><span className="secure"><ShieldCheck size={15}/> Private workspace</span><div className="top-avatar">{user.username?.[0]?.toUpperCase()||'M'}</div></div></header>
+    <main className="main-area"><header className="topbar"><button className="menu-button" onClick={()=>setMobileNav(true)}><Menu size={20}/></button><div className="breadcrumb"><span>Workspace</span><span className="crumb-slash">/</span><b>{visibleModules.find(m=>m.id===activeSection)?.label}</b></div><div className="top-right"><span className="secure"><ShieldCheck size={15}/> Private workspace</span><div className="top-avatar">{user.username?.[0]?.toUpperCase()||'M'}</div></div></header>
       <div className="content">
         {error&&<div className="alert"><CircleHelp size={17}/>{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
-        {section==='reports'&&<ReportsPage reports={reports} selected={selected} analysis={analysis} busy={busy} onUpload={upload} onSelect={openReport} token={token} />}
-        {section==='timeline'&&<HealthTimelinePage token={token} headers={headers} />}
-        {section==='research'&&<ResearchPage reports={reports} token={token} headers={headers} />}
-        {section==='medications'&&<MedicationPage token={token} headers={headers} />}
-        {section==='emergency'&&<EmergencyPage token={token} headers={headers} />}
-        {section==='care'&&<CarePage user={user} token={token} headers={headers} reports={reports} onReportUploaded={report=>setReports(current=>[report,...current.filter(item=>item._id!==report._id)])} />}
+        {activeSection==='reports'&&<ReportsPage reports={reports} selected={selected} analysis={analysis} busy={busy} onUpload={upload} onSelect={openReport} token={token} />}
+        {activeSection==='timeline'&&<HealthTimelinePage token={token} headers={headers} />}
+        {activeSection==='research'&&<ResearchPage reports={reports} token={token} headers={headers} />}
+        {activeSection==='medications'&&<MedicationPage token={token} headers={headers} />}
+        {activeSection==='emergency'&&<EmergencyPage token={token} headers={headers} />}
+        {activeSection==='care'&&<CarePage user={user} token={token} headers={headers} reports={reports} onReportUploaded={report=>setReports(current=>[report,...current.filter(item=>item._id!==report._id)])} />}
       </div>
       <footer className="footer-disclaimer"><ShieldCheck size={15}/><span>MediMind helps you understand health information. It does not provide a diagnosis or replace care from a qualified professional.</span></footer>
     </main>
-    <AICompanion page={section} token={token} onNavigate={target=>{setSection(target);setMobileNav(false);setError('');if(target==='reports')setSelected(null);}} />
+    <AICompanion page={activeSection} role={user.role} token={token} onNavigate={target=>{if(user.role==='doctor'&&target!=='care')return;setSection(target);setMobileNav(false);setError('');if(target==='reports')setSelected(null);}} />
   </div>;
 }
 
