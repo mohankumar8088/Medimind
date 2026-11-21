@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -113,6 +114,26 @@ class ResearchChatIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     context: str = Field(default="", max_length=5000)
 
+class CompanionIn(BaseModel):
+    message: str = Field(min_length=1, max_length=1200)
+    current_page: str = Field(default="reports", pattern=r"^(reports|research|care)$")
+    mode: str = Field(default="ask", pattern=r"^(ask|guide)$")
+
+COMPANION_GUIDES = {
+    "upload_report": "reports",
+    "understand_report": "reports",
+    "explore_research": "research",
+    "care_conversation": "care",
+}
+COMPANION_FIELDS = {
+    "report_upload": ("reports", "Upload a report file using the supported file picker."),
+    "report_question": ("reports", "Ask a question about the selected report in plain language."),
+    "research_report": ("research", "Optionally choose a saved report to use as research context."),
+    "research_question": ("research", "Enter a general research question or finding. Do not enter names or identifiers."),
+    "doctor_username": ("care", "Enter the exact username of a registered doctor to start a private conversation."),
+    "care_message": ("care", "Write a message for the doctor in your existing conversation."),
+}
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "model": GEMINI_MODEL, "database_configured": bool(MONGO_URI)}
@@ -168,6 +189,59 @@ async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperatur
     data = response.json()
     try: return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError): raise HTTPException(502, "Gemini returned no readable response.")
+
+@app.post("/api/companion/chat")
+async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
+    del user  # Authentication is required; assistant conversations are deliberately not stored.
+    medical_advice_patterns = (
+        r"\bdiagnos\w*\b", r"\b(?:treat|treatment|medication|medicine|dosage|dose|cure)\b",
+        r"\bwhat (?:disease|condition) do i have\b",
+        r"\b(?:interpret|explain)\b.{0,45}\b(?:blood|lab|test) results?\b",
+        r"\b(?:abnormal|high|low)\b.{0,35}\b(?:result|level|value|test)\b",
+    )
+    if any(re.search(pattern, payload.message, re.IGNORECASE) for pattern in medical_advice_patterns):
+        return {
+            "message": "I can guide you through MediMind, but I can’t interpret medical results or recommend care. Open My Reports for the report explanation, and discuss personal medical questions with a qualified clinician.",
+            "action": "ANSWER", "section": None, "guide_id": None, "field_id": None,
+        }
+    prompt = f"""You are MediMind Companion, a friendly guide to using the MediMind website.
+Answer questions about website navigation and form fields only. Do not interpret medical reports, diagnose, estimate disease likelihood, or recommend treatment. If asked for medical advice, explain that this assistant only guides website use and point the user to their report explanation or a qualified clinician.
+The user is on page: {payload.current_page}. Mode: {payload.mode}. User request: {payload.message}
+Return a JSON object only with keys: message, action, section, guide_id, field_id.
+action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. section must be reports, research, care, or null.
+Allowed guide_id values: upload_report, understand_report, explore_research, care_conversation.
+Allowed field_id values: report_upload, report_question, research_report, research_question, doctor_username, care_message.
+Use NAVIGATE when the user asks to open a module. Use GUIDE when the user wants a step-by-step tour; choose only a guide_id that matches an existing module. Use FIELD_HELP when they ask what to enter in a known field; your message should explain the expected input and give a non-medical example if useful. Otherwise use ANSWER.
+When mode is guide, prefer GUIDE for a workflow request. Never claim to have uploaded, submitted, shared, deleted, or changed any data. Never generate code or arbitrary browser actions. Keep message under 600 characters.
+Available field descriptions: {json.dumps({key: value[1] for key, value in COMPANION_FIELDS.items()})}
+Return only JSON."""
+    raw = await gemini(prompt, temperature=0.2, json_mode=True)
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {"message": raw[:600] or "I can help you navigate MediMind. What would you like to do?", "action": "ANSWER", "section": None, "guide_id": None, "field_id": None}
+    if not isinstance(data, dict):
+        data = {}
+    message = str(data.get("message", "I can help you navigate MediMind. What would you like to do?"))[:600]
+    action = data.get("action")
+    section_value = data.get("section")
+    guide_value = data.get("guide_id")
+    field_value = data.get("field_id")
+    section = section_value if isinstance(section_value, str) and section_value in {"reports", "research", "care"} else None
+    guide_id = guide_value if isinstance(guide_value, str) and guide_value in COMPANION_GUIDES else None
+    field_id = field_value if isinstance(field_value, str) and field_value in COMPANION_FIELDS else None
+    if action == "GUIDE" and guide_id:
+        section = COMPANION_GUIDES[guide_id]
+        field_id = None
+    elif action == "FIELD_HELP" and field_id:
+        section = COMPANION_FIELDS[field_id][0]
+        guide_id = None
+    elif action == "NAVIGATE" and section:
+        guide_id = None
+        field_id = None
+    else:
+        action, section, guide_id, field_id = "ANSWER", None, None, None
+    return {"message": message, "action": action, "section": section, "guide_id": guide_id, "field_id": field_id}
 
 async def extract_report(filename: str, mime: str, content: bytes) -> str:
     ext = filename.lower().rsplit(".", 1)[-1]
