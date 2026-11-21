@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import bcrypt
-import fitz
 import httpx
+import pymupdf
 from bson import ObjectId
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -169,7 +169,7 @@ async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperatur
 async def extract_report(filename: str, mime: str, content: bytes) -> str:
     ext = filename.lower().rsplit(".", 1)[-1]
     if ext == "pdf":
-        doc = fitz.open(stream=content, filetype="pdf")
+        doc = pymupdf.open(stream=content, filetype="pdf")
         text = "\n".join(page.get_text() for page in doc).strip()
         if text: return text[:45000]
         return await gemini("Transcribe all readable text in this medical report. Preserve test names, values, units, reference ranges and dates. Do not interpret it.", ("application/pdf", content))
