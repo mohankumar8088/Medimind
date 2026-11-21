@@ -75,7 +75,7 @@ function App() {
         {error&&<div className="alert"><CircleHelp size={17}/>{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         {section==='reports'&&<ReportsPage reports={reports} selected={selected} analysis={analysis} busy={busy} onUpload={upload} onSelect={openReport} token={token} />}
         {section==='research'&&<ResearchPage reports={reports} token={token} headers={headers} />}
-        {section==='care'&&<CarePage user={user} token={token} headers={headers} />}
+        {section==='care'&&<CarePage user={user} token={token} headers={headers} reports={reports} onReportUploaded={report=>setReports(current=>[report,...current.filter(item=>item._id!==report._id)])} />}
       </div>
       <footer className="footer-disclaimer"><ShieldCheck size={15}/><span>MediMind helps you understand health information. It does not provide a diagnosis or replace care from a qualified professional.</span></footer>
     </main>
@@ -139,17 +139,83 @@ function ResearchPage({reports,token,headers}) {
   </>;
 }
 
-function CarePage({user,token,headers}) {
-  const [doctor,setDoctor]=useState(''); const [room,setRoom]=useState(null); const [sessions,setSessions]=useState([]); const [messages,setMessages]=useState([]); const [text,setText]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState(''); const [recording,setRecording]=useState(false); const [media,setMedia]=useState(null); const [recorder,setRecorder]=useState(null); const [sessionId,setSessionId]=useState('');
+function CarePage({user,token,headers,reports,onReportUploaded}) {
+  const [doctor,setDoctor]=useState(''); const [room,setRoom]=useState(null); const [sessions,setSessions]=useState([]); const [messages,setMessages]=useState([]); const [text,setText]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState(''); const [recording,setRecording]=useState(false); const [media,setMedia]=useState(null); const [recorder,setRecorder]=useState(null); const [sessionId,setSessionId]=useState(''); const [attachmentOpen,setAttachmentOpen]=useState(false); const [reportChoice,setReportChoice]=useState('');
+  const shareableReports=reports.filter(report=>!report._id?.startsWith('sample'));
   useEffect(()=>{if(!token)return; fetch(`${API}/conversations`,{headers}).then(r=>r.ok?r.json():[]).then(setSessions).catch(()=>{});},[token]);
   useEffect(()=>{const el=document.getElementById('message-list');if(el)el.scrollTop=el.scrollHeight;},[messages]);
   const start=async e=>{e.preventDefault();setError('');setBusy(true);try{const r=await fetch(`${API}/conversations`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({doctor_username:doctor})});const j=await r.json();if(!r.ok)throw Error(j.detail||'Could not start a conversation.');setRoom(j);setMessages(j.messages||[]);setSessionId(j._id);setDoctor('');}catch(e){setError(e.message);}finally{setBusy(false);}};
   const load=async id=>{const r=await fetch(`${API}/conversations/${id}`,{headers});const j=await r.json();if(r.ok){setRoom(j);setMessages(j.messages||[]);setSessionId(id);}};
   const send=async (content=text,audio=null)=>{if(!content.trim()&&!audio)return;setBusy(true);try{let r,j;if(audio){const form=new FormData();form.append('file',audio);form.append('transcript',content);r=await fetch(`${API}/conversations/${sessionId}/audio`,{method:'POST',headers,body:form});}else{r=await fetch(`${API}/conversations/${sessionId}/messages`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({content})});}j=await r.json();if(!r.ok)throw Error(j.detail||'Message could not be sent.');setMessages(j.messages||[]);setText('');}catch(e){setError(e.message);}finally{setBusy(false);}};
+  const shareSavedReport=async()=>{
+    if(!reportChoice||!sessionId)return;
+    const targetSession=sessionId;
+    setBusy(true);setError('');
+    try{const r=await fetch(`${API}/conversations/${targetSession}/reports`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({report_id:reportChoice})});const j=await r.json();if(!r.ok)throw Error(j.detail||'Report could not be shared.');if(sessionId===targetSession){setMessages(j.messages||[]);setAttachmentOpen(false);setReportChoice('');}}
+    catch(e){setError(e.message);}
+    finally{setBusy(false);}
+  };
+  const uploadAndShareReport=async file=>{
+    if(!file||!sessionId)return;
+    const targetSession=sessionId;
+    let saved=false;
+    setBusy(true);setError('');
+    try{
+      const body=new FormData();body.append('file',file);
+      let r=await fetch(`${API}/reports`,{method:'POST',headers,body});
+      const report=await r.json();
+      if(!r.ok)throw Error(report.detail||'Report upload failed.');
+      saved=true;onReportUploaded(report);
+      r=await fetch(`${API}/conversations/${targetSession}/reports`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({report_id:report._id})});
+      const j=await r.json();
+      if(!r.ok)throw Error(j.detail||'Report could not be shared.');
+      if(sessionId===targetSession){setMessages(j.messages||[]);setAttachmentOpen(false);setReportChoice('');}
+    }catch(e){setError(saved?`Report was saved to My Reports but could not be shared: ${e.message}`:e.message);}
+    finally{setBusy(false);}
+  };
   const playAudio=async url=>{try{const r=await fetch(`${API.replace(/\/api\/?$/,'')}${url}`,{headers});if(!r.ok)throw Error();const objectUrl=URL.createObjectURL(await r.blob());const audio=new Audio(objectUrl);audio.onended=()=>URL.revokeObjectURL(objectUrl);await audio.play();}catch{setError('This voice note could not be played.');}};
+  const downloadSharedReport=async message=>{try{const r=await fetch(`${API.replace(/\/api\/?$/,'')}${message.report_url}`,{headers});if(!r.ok){const j=await r.json();throw Error(j.detail||'Report download failed.');}const objectUrl=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=objectUrl;a.download=message.report_filename||'medical-report';a.click();setTimeout(()=>URL.revokeObjectURL(objectUrl),1000);}catch(e){setError(e.message||'This report could not be downloaded.');}};
   const toggleRecord=async()=>{if(recording){recorder?.stop();setRecording(false);return;}try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});const rec=new MediaRecorder(stream);const chunks=[];rec.ondataavailable=e=>chunks.push(e.data);rec.onstop=()=>{const blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});const f=new File([blob],`voice-note-${Date.now()}.webm`,{type:blob.type});setMedia(f);stream.getTracks().forEach(t=>t.stop());};rec.start();setRecorder(rec);setRecording(true);}catch{setError('Please allow microphone access to record a voice note.');}};
-  if(!token)return <FeatureSignIn title="Care conversations" text="Sign in to start a conversation and keep your messages safely together."/>;return <>
-    <div className="care-grid"><section className="care-main">{room?<><div className="conversation-header"><button className="text-button" onClick={()=>setRoom(null)}>← Conversations</button><div className="conversation-doctor"><div className="doctor-avatar"><Stethoscope size={17}/></div><span><b>Dr. {room.doctor_username}</b><small>Private conversation · saved automatically</small></span><span className="online-dot"/></div></div><div className="message-list" id="message-list">{messages.length===0?<div className="conversation-empty"><div className="empty-bubble"><MessageCircle size={24}/></div><h3>Your conversation starts here</h3><p>Send a message or voice note whenever you’re ready.</p></div>:messages.map((m,i)=><div className={`message-row ${m.sender_id===user.id?'mine':''}`} key={i}><div className="message-avatar">{m.sender_role==='doctor'?<Stethoscope size={14}/>:<UserRound size={14}/>}</div><div className="message-body"><small>{m.sender_username} · {new Date(m.created_at).toLocaleString()}</small><div className="message-bubble">{m.audio_url&&<button type="button" className="audio-tag" onClick={()=>playAudio(m.audio_url)}><AudioLines size={15}/> Play voice note</button>}{m.content}</div></div></div>)}</div><div className="composer-wrap">{media&&<div className="audio-pending"><AudioLines size={15}/> Voice note ready to send <button onClick={()=>setMedia(null)}><X size={14}/></button></div>}<form className="composer" onSubmit={e=>{e.preventDefault();send(text,media);setMedia(null);}}><button type="button" className={`mic-button ${recording?'recording':''}`} onClick={toggleRecord}><Mic size={18}/></button><input value={text} onChange={e=>setText(e.target.value)} placeholder={recording?'Recording… tap microphone to stop':'Write a message…'} disabled={recording}/><button type="submit" className="send-button" disabled={busy||(!text.trim()&&!media)}><Send size={17}/></button></form><small>Messages are saved and remain available in your conversation history.</small></div></>:<><div className="conversation-start"><div className="start-icon"><MessageCircle size={20}/></div><h2>Start a conversation</h2><p>Enter your doctor’s username. We’ll verify it before opening a shared space.</p><form onSubmit={start}><label className="field-label">Doctor’s username</label><div className="doctor-input"><span>@</span><input value={doctor} onChange={e=>setDoctor(e.target.value)} placeholder="e.g. dr.smith" minLength={3} required/><button className="primary-button" disabled={busy}>{busy?'Checking…':'Continue'}<ArrowRight size={15}/></button></div></form><div className="secure-note"><ShieldCheck size={15}/> Only a registered doctor can be matched.</div></div><div className="care-reassure"><div><AudioLines size={18}/></div><span><b>Text or voice, your choice</b><small>Share a message or record a voice note.</small></span><div><History size={18}/></div><span><b>Always here when you return</b><small>Your conversation history stays saved.</small></span></div></>}</section><aside className="care-side"><div className="history-heading"><div><h3>Your conversations</h3><p>{sessions.length} saved {sessions.length===1?'conversation':'conversations'}</p></div><History size={18}/></div>{sessions.length?sessions.map(s=><button className={`session-row ${sessionId===s._id?'selected':''}`} key={s._id} onClick={()=>load(s._id)}><div className="doctor-avatar small"><Stethoscope size={15}/></div><div><b>Dr. {s.doctor_username}</b><small>{s.last_message||'Conversation started'}</small></div><span className="session-date">{s.updated_at?new Date(s.updated_at).toLocaleDateString():''}</span></button>):<div className="history-empty"><div className="history-icon"><ClipboardList size={19}/></div><b>No conversations yet</b><p>When you connect with a doctor, your chats will appear here.</p></div>}<div className="care-side-note"><ShieldCheck size={15}/><span>Only you and your connected doctor can see these messages.</span></div></aside></div>{error&&<div className="inline-error">{error}</div>}</>;
+  if(!token)return <FeatureSignIn title="Care conversations" text="Sign in to start a conversation and keep your messages safely together."/>;
+  return <>
+    <div className="care-grid">
+      <section className="care-main">
+        {room?<>
+          <div className="conversation-header">
+            <button className="text-button" onClick={()=>{setRoom(null);setAttachmentOpen(false);}}>← Conversations</button>
+            <div className="conversation-doctor"><div className="doctor-avatar"><Stethoscope size={17}/></div><span><b>Dr. {room.doctor_username}</b><small>Private conversation · saved automatically</small></span><span className="online-dot"/></div>
+          </div>
+          <div className="message-list" id="message-list">
+            {messages.length===0?<div className="conversation-empty"><div className="empty-bubble"><MessageCircle size={24}/></div><h3>Your conversation starts here</h3><p>Send a message, share a report, or record a voice note.</p></div>:messages.map((m,i)=><div className={`message-row ${m.sender_id===user.id?'mine':''}`} key={i}><div className="message-avatar">{m.sender_role==='doctor'?<Stethoscope size={14}/>:<UserRound size={14}/>}</div><div className="message-body"><small>{m.sender_username} · {new Date(m.created_at).toLocaleString()}</small><div className="message-bubble">{m.audio_url&&<button type="button" className="audio-tag" onClick={()=>playAudio(m.audio_url)}><AudioLines size={15}/> Play voice note</button>}{m.report_id?<button type="button" className="shared-report" onClick={()=>downloadSharedReport(m)} disabled={!m.report_url}><FileText size={17}/><span><b>Shared report</b><small>{m.report_filename||m.content}</small></span><ArrowDownToLine size={15}/></button>:m.content}</div></div></div>)}
+          </div>
+          <div className="composer-wrap">
+            {attachmentOpen&&<div className="attachment-panel">
+              <div className="attachment-heading"><Paperclip size={15}/> Share a report</div>
+              {shareableReports.length?<div className="report-share-row"><select aria-label="Choose a saved report" value={reportChoice} onChange={e=>setReportChoice(e.target.value)}><option value="">Choose from My Reports</option>{shareableReports.map(report=><option key={report._id} value={report._id}>{report.filename}</option>)}</select><button type="button" onClick={shareSavedReport} disabled={busy||!reportChoice}>{busy?'Sharing…':'Share'}</button></div>:<p className="no-saved-reports">No saved reports yet. Upload one to share it here.</p>}
+              <label className="upload-report-action"><Upload size={15}/> Upload and share a new report<input type="file" accept=".pdf,.png,.jpg,.jpeg,.docx,.txt,.csv,.webp" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';uploadAndShareReport(file);}}/></label>
+            </div>}
+            {media&&<div className="audio-pending"><AudioLines size={15}/> Voice note ready to send <button onClick={()=>setMedia(null)}><X size={14}/></button></div>}
+            <form className="composer" onSubmit={e=>{e.preventDefault();send(text,media);setMedia(null);}}>
+              <button type="button" className={`attach-button ${attachmentOpen?'active':''}`} title="Attach or upload a report" aria-label="Attach or upload a report" aria-expanded={attachmentOpen} onClick={()=>setAttachmentOpen(open=>!open)} disabled={busy}><Paperclip size={17}/></button>
+              <button type="button" className={`mic-button ${recording?'recording':''}`} onClick={toggleRecord}><Mic size={18}/></button>
+              <input value={text} onChange={e=>setText(e.target.value)} placeholder={recording?'Recording… tap microphone to stop':'Write a message…'} disabled={recording}/>
+              <button type="submit" className="send-button" disabled={busy||(!text.trim()&&!media)}><Send size={17}/></button>
+            </form>
+            <small>Messages are saved and remain available in your conversation history.</small>
+          </div>
+        </>:<>
+          <div className="conversation-start"><div className="start-icon"><MessageCircle size={20}/></div><h2>Start a conversation</h2><p>Enter your doctor’s username. We’ll verify it before opening a shared space.</p><form onSubmit={start}><label className="field-label">Doctor’s username</label><div className="doctor-input"><span>@</span><input value={doctor} onChange={e=>setDoctor(e.target.value)} placeholder="e.g. dr.smith" minLength={3} required/><button className="primary-button" disabled={busy}>{busy?'Checking…':'Continue'}<ArrowRight size={15}/></button></div></form><div className="secure-note"><ShieldCheck size={15}/> Only a registered doctor can be matched.</div></div>
+          <div className="care-reassure"><div><AudioLines size={18}/></div><span><b>Text or voice, your choice</b><small>Share a message or record a voice note.</small></span><div><History size={18}/></div><span><b>Always here when you return</b><small>Your conversation history stays saved.</small></span></div>
+        </>}
+      </section>
+      <aside className="care-side">
+        <div className="history-heading"><div><h3>Your conversations</h3><p>{sessions.length} saved {sessions.length===1?'conversation':'conversations'}</p></div><History size={18}/></div>
+        {sessions.length?sessions.map(s=><button className={`session-row ${sessionId===s._id?'selected':''}`} key={s._id} onClick={()=>load(s._id)}><div className="doctor-avatar small"><Stethoscope size={15}/></div><div><b>Dr. {s.doctor_username}</b><small>{s.last_message||'Conversation started'}</small></div><span className="session-date">{s.updated_at?new Date(s.updated_at).toLocaleDateString():''}</span></button>):<div className="history-empty"><div className="history-icon"><ClipboardList size={19}/></div><b>No conversations yet</b><p>When you connect with a doctor, your chats will appear here.</p></div>}
+        <div className="care-side-note"><ShieldCheck size={15}/><span>Only you and your connected doctor can see these messages.</span></div>
+      </aside>
+    </div>
+    {error&&<div className="inline-error">{error}</div>}
+  </>;
 }
 
 function FeatureSignIn({title,text}) {return <div className="locked-state"><div className="locked-icon"><ShieldCheck size={24}/></div><div className="eyebrow">YOUR PRIVATE HEALTH SPACE</div><h2>{title}</h2><p>{text}</p><div className="secure-note"><ShieldCheck size={15}/> Sign in from your account to continue.</div></div>;}

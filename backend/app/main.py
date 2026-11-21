@@ -99,6 +99,9 @@ class MessageIn(BaseModel):
 class ConversationIn(BaseModel):
     doctor_username: str = Field(min_length=3, max_length=32)
 
+class ConversationReportIn(BaseModel):
+    report_id: str
+
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=3000)
 
@@ -292,7 +295,7 @@ async def create_conversation(payload: ConversationIn, user=Depends(current_user
 
 def conversation_out(doc):
     convo_id = str(doc["_id"])
-    msgs = [{**m, "sender_id": str(m["sender_id"]), "created_at": m["created_at"].isoformat(), **({"audio_url": f"/api/conversations/{convo_id}/audio/{m['audio_id']}"} if m.get("audio_id") else {})} for m in doc.get("messages", [])]
+    msgs = [{**m, "sender_id": str(m["sender_id"]), "created_at": m["created_at"].isoformat(), **({"audio_url": f"/api/conversations/{convo_id}/audio/{m['audio_id']}"} if m.get("audio_id") else {}), **({"report_url": f"/api/conversations/{convo_id}/reports/{m['report_id']}/file"} if m.get("report_id") else {})} for m in doc.get("messages", [])]
     return {"_id": str(doc["_id"]), "patient_username": doc.get("patient_username"), "doctor_username": doc.get("doctor_username"), "messages": msgs, "created_at": doc["created_at"], "updated_at": doc["updated_at"], "last_message": doc.get("messages", [])[-1].get("content", "")[:70] if doc.get("messages") else "Conversation started"}
 
 def conversation_filter(doc_id: str, user: dict):
@@ -313,12 +316,15 @@ async def get_conversation(conversation_id: str, user=Depends(current_user)):
     if not doc: raise HTTPException(404, "Conversation not found.")
     return conversation_out(doc)
 
-async def append_message(conversation_id: str, user: dict, content: str, audio_id: str | None = None):
+async def append_message(conversation_id: str, user: dict, content: str, audio_id: str | None = None, report_id: str | None = None, report_filename: str | None = None):
     filt = conversation_filter(conversation_id, user)
     conv = await database().conversations.find_one(filt)
     if not conv: raise HTTPException(404, "Conversation not found or you are not a participant.")
     now = datetime.now(timezone.utc)
     message = {"sender_id": user["_id"], "sender_username": user["username"], "sender_role": user["role"], "content": content[:5000], "audio_id": audio_id, "created_at": now}
+    if report_id:
+        message["report_id"] = report_id
+        message["report_filename"] = report_filename
     await database().conversations.update_one(filt, {"$push": {"messages": message}, "$set": {"updated_at": now}})
     updated = await database().conversations.find_one(filt)
     result = conversation_out(updated)
@@ -329,6 +335,27 @@ async def append_message(conversation_id: str, user: dict, content: str, audio_i
 @app.post("/api/conversations/{conversation_id}/messages")
 async def send_message(conversation_id: str, payload: MessageIn, user=Depends(current_user)):
     return await append_message(conversation_id, user, payload.content.strip())
+
+@app.post("/api/conversations/{conversation_id}/reports")
+async def send_report(conversation_id: str, payload: ConversationReportIn, user=Depends(current_user)):
+    report = await database().reports.find_one({"_id": oid(payload.report_id), "owner_id": user["_id"]})
+    if not report: raise HTTPException(404, "Report not found.")
+    return await append_message(conversation_id, user, f"Shared a report: {report['filename']}", report_id=str(report["_id"]), report_filename=report["filename"])
+
+@app.get("/api/conversations/{conversation_id}/reports/{report_id}/file")
+async def get_conversation_report(conversation_id: str, report_id: str, user=Depends(current_user)):
+    report_oid = oid(report_id)
+    filt = conversation_filter(conversation_id, user)
+    shared = await database().conversations.find_one({**filt, "messages.report_id": report_id})
+    if not shared: raise HTTPException(404, "Report not found.")
+    if fs is None: raise HTTPException(503, "File storage is not configured.")
+    report = await database().reports.find_one({"_id": report_oid})
+    if not report: raise HTTPException(404, "Report not found.")
+    from fastapi.responses import StreamingResponse
+    from urllib.parse import quote
+    gridout = await fs.open_download_stream(report["file_id"])
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(report['filename'])}"}
+    return StreamingResponse(gridout, media_type=report.get("file_type", "application/octet-stream"), headers=headers)
 
 @app.post("/api/conversations/{conversation_id}/audio")
 async def send_audio(conversation_id: str, file: UploadFile = File(...), transcript: str = Form(""), user=Depends(current_user)):
