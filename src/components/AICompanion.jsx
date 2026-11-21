@@ -3,6 +3,7 @@ import { Bot, ChevronDown, Compass, HelpCircle, Mic, MicOff, Send, ShieldCheck, 
 import './AICompanion.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
+const VOICE_LANGUAGES = [{code:'en-IN',label:'English'},{code:'hi-IN',label:'हिन्दी'},{code:'kn-IN',label:'ಕನ್ನಡ'},{code:'te-IN',label:'తెలుగు'},{code:'ta-IN',label:'தமிழ்'}];
 const GUIDES = {
   upload_report: {
     section: 'reports', title: 'Upload a medical report', steps: [
@@ -22,6 +23,9 @@ const GUIDES = {
       { target: 'research-search', title: 'Search the literature', body: 'MediMind searches PubMed and presents cautious research leads with links. These are not a diagnosis.' },
     ],
   },
+  health_timeline: { section: 'timeline', title: 'Review your health timeline', steps: [{ target: 'twin-build', title: 'Compare your reports', body: 'Gather dates and create a cautious, evidence-linked overview from your saved reports.' }, { target: 'twin-results', title: 'Review the sources', body: 'Each observation names the reports it used. Discuss important trends with your clinician.' }] },
+  medication_plan: { section: 'medications', title: 'Set up your medication plan', steps: [{ target: 'medication-scan', title: 'Scan a prescription', body: 'Upload a prescription to create a draft. Check each extracted field against the original before adding it.' }, { target: 'medication-name', title: 'Enter medicine details', body: 'Use the medicine name and instructions exactly as written by your clinician or pharmacist.' }] },
+  emergency_profile: { section: 'emergency', title: 'Create an emergency profile', steps: [{ target: 'emergency-fields', title: 'Add emergency essentials', body: 'Only enter details you want to share. Choose each field deliberately.' }, { target: 'emergency-share', title: 'Choose sharing fields', body: 'The temporary QR link exposes only selected details. Anyone who scans it can view them until expiry or revocation.' }] },
   care_conversation: {
     section: 'care', title: 'Start a doctor conversation', steps: [
       { target: 'doctor-username', title: 'Enter a doctor username', body: 'Use the exact username of a registered doctor. MediMind checks the username before opening a conversation.' },
@@ -35,24 +39,31 @@ const FIELD_TARGETS = {
   report_question: ['reports', 'report-question'],
   research_report: ['research', 'research-report'],
   research_question: ['research', 'research-question'],
+  medication_upload: ['medications', 'medication-scan'],
+  medication_name: ['medications', 'medication-name'],
+  emergency_profile: ['emergency', 'emergency-fields'],
+  emergency_share: ['emergency', 'emergency-share'],
   doctor_username: ['care', 'doctor-username'],
   care_message: ['care', 'care-message'],
 };
 
 const suggestions = [
   'Help me upload a report',
-  'Explain my report',
+  'Review my health timeline',
   'Explore rare-disease research',
+  'Set up my medication plan',
+  'Create an emergency profile',
   'Start a doctor conversation',
 ];
 
 function pageLabel(page) {
-  return ({ reports: 'My reports', research: 'Rare disease research', care: 'Care conversations' })[page] || 'MediMind';
+  return ({ reports: 'My reports', timeline:'Health timeline', research: 'Rare disease research', medications:'Medication plan', emergency:'Emergency profile', care: 'Care conversations' })[page] || 'MediMind';
 }
 
 export default function AICompanion({ page, token, onNavigate }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('ask');
+  const [language, setLanguage] = useState('en-IN');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([{ role: 'assistant', text: "Hi, I’m MediMind Companion. Ask me how to use a feature, or choose Guide Me for step-by-step help." }]);
   const [busy, setBusy] = useState(false);
@@ -163,7 +174,7 @@ export default function AICompanion({ page, token, onNavigate }) {
       const response = await fetch(`${API}/companion/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ message, current_page: page, mode }),
+        body: JSON.stringify({ message, current_page: page, mode, language }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || 'The companion is unavailable right now.');
@@ -183,7 +194,7 @@ export default function AICompanion({ page, token, onNavigate }) {
     if (!Recognition) { setNotice('Voice input is not available in this browser. You can type your request instead.'); return; }
     if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
     const recognition = new Recognition();
-    recognition.lang = 'en-IN'; recognition.continuous = false; recognition.interimResults = false;
+    recognition.lang = language; recognition.continuous = false; recognition.interimResults = false;
     recognition.onstart = () => { setListening(true); setNotice('Listening… your transcript will appear here for review.'); };
     recognition.onresult = event => {
       const transcript = event.results?.[0]?.[0]?.transcript || '';
@@ -200,7 +211,7 @@ export default function AICompanion({ page, token, onNavigate }) {
     if (!('speechSynthesis' in window) || !window.SpeechSynthesisUtterance) { setNotice('Voice playback is not available in this browser.'); return; }
     if (speakingIndex === index) { window.speechSynthesis.cancel(); setSpeakingIndex(null); return; }
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = navigator.language || 'en-IN'; utterance.rate = 0.95;
+    utterance.lang = language; utterance.rate = 0.95;
     utterance.onend = () => setSpeakingIndex(null); utterance.onerror = () => setSpeakingIndex(null);
     window.speechSynthesis.cancel(); setSpeakingIndex(index); window.speechSynthesis.speak(utterance);
   };
@@ -215,7 +226,7 @@ export default function AICompanion({ page, token, onNavigate }) {
   return <>
     {open ? <section className="companion-panel" aria-label="MediMind AI Companion">
       <header className="companion-header"><div className="companion-avatar"><Bot size={19}/></div><div className="companion-title"><b>MediMind Companion</b><small><span/> Here to help · {pageLabel(page)}</small></div><button type="button" className="companion-close" aria-label="Close assistant" onClick={() => { setOpen(false); recognitionRef.current?.stop?.(); setListening(false); window.speechSynthesis?.cancel(); setSpeakingIndex(null); }}><X size={18}/></button></header>
-      <div className="companion-mode" role="tablist" aria-label="Assistant mode"><button type="button" role="tab" aria-selected={mode==='ask'} className={mode==='ask'?'active':''} onClick={() => setMode('ask')}><HelpCircle size={14}/> Ask AI</button><button type="button" role="tab" aria-selected={mode==='guide'} className={mode==='guide'?'active':''} onClick={() => setMode('guide')}><Compass size={14}/> Guide Me</button></div>
+      <div className="companion-mode" role="tablist" aria-label="Assistant mode"><button type="button" role="tab" aria-selected={mode==='ask'} className={mode==='ask'?'active':''} onClick={() => setMode('ask')}><HelpCircle size={14}/> Ask AI</button><button type="button" role="tab" aria-selected={mode==='guide'} className={mode==='guide'?'active':''} onClick={() => setMode('guide')}><Compass size={14}/> Guide Me</button><label className="companion-language"><span>Voice</span><select aria-label="Assistant language" value={language} onChange={e=>setLanguage(e.target.value)}>{VOICE_LANGUAGES.map(item=><option key={item.code} value={item.code}>{item.label}</option>)}</select></label></div>
       <div className="companion-messages" ref={scrollRef} aria-live="polite">
         {messages.map((entry, index) => <div key={`${index}-${entry.role}`} className={`companion-message ${entry.role}`}><div className="companion-bubble">{entry.text}</div>{entry.role==='assistant'&&<button className={`companion-speak ${speakingIndex===index?'active':''}`} type="button" aria-label={speakingIndex===index?'Stop speaking':'Hear response'} title={speakingIndex===index?'Stop speaking':'Hear response'} onClick={() => speakReply(entry.text,index)}>{speakingIndex===index?<VolumeX size={14}/>:<Volume2 size={14}/>}</button>}</div>)}
         {busy&&<div className="companion-typing"><span/><span/><span/> Thinking…</div>}

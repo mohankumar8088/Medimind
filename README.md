@@ -10,6 +10,11 @@ A React + FastAPI starter for a private patient health workspace. The project ha
 - PubMed E-utilities search, article links, and cautious AI summaries. The research area describes possible topics for clinician discussion; it never labels its output as a diagnosis.
 - Persistent patient–doctor conversations. The API verifies the username belongs to a doctor and limits each conversation to its patient and doctor participants. Voice notes are transcribed by Gemini and stored alongside the conversation.
 - A responsive, beginner-friendly React interface with sample report rows to preview the library before signing in.
+- Health timeline: combines a patient's saved reports into a dated history and asks Gemini for cautious observations that cite the exact report files used.
+- Explainable rare-disease research: shows evidence that may fit, what is not established, missing information, and links back to PubMed records.
+- Medication plan: prescription scanning creates an editable draft; the patient reviews and saves a personal schedule, with optional browser reminders.
+- Multilingual AI Companion: English, Hindi, Kannada, Telugu, and Tamil text/voice guidance using the browser speech APIs where supported.
+- Emergency profile: patient-selected details can be shared with a 24-hour, revocable QR link. The QR contains only an opaque token; the profile is returned from the authenticated API after checking its expiry and revocation state.
 
 ## Before you begin
 
@@ -82,5 +87,7 @@ The backend also exposes interactive API documentation at `/docs` when running l
 ## Important product and safety notes
 
 This is a functional starter, not a clinical product or a compliance certification. The AI can misread reports or literature. A clinician should verify important interpretations. Avoid entering information about emergencies; contact local emergency services or a clinician instead. A user can choose the doctor role during self-registration; the starter checks that a matching username has that role, but it does not verify a medical license or the real-world identity of a doctor. Before handling real patient data, have qualified security, privacy, and healthcare-compliance reviewers assess retention, consent, access logging, encryption, abuse prevention, data deletion, backups, and the laws that apply in your region. MongoDB, Gemini, Render, and Vercel account configuration and contracts determine the protections available in production.
+
+Prescription scanning is an extraction aid, not a medication safety service. Check the draft against the original prescription. Browser reminders operate only while the MediMind page is open and notification permission has been granted; they are not a substitute for a clinical reminder system. No drug-interaction checker is included: the National Library of Medicine's RxNav FAQ says its drug-interaction feature was discontinued on January 2, 2024. Emergency QR links are bearer links, so anyone who receives an active QR can see the fields selected by the patient; share carefully and revoke access when needed.
 
 Uploaded files contain health information. Keep API keys server-side, restrict database network access, and never share a doctor account. This starter stores report files in GridFS and stores extracted report text and conversation messages in MongoDB. It does not yet include account recovery, multifactor authentication, consent workflows, an administrative audit console, or user-initiated record deletion.

@@ -5,6 +5,8 @@ import io
 import json
 import os
 import re
+import secrets
+import hashlib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from docx import Document
 from PIL import Image
 from dotenv import load_dotenv
@@ -35,7 +37,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 MAX_UPLOAD = int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024
 app = FastAPI(title="MediMind API", version="1.0.0", description="Private, role-aware health report and care conversation API")
 origins = [x.strip() for x in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if x.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
 security = HTTPBearer(auto_error=False)
 client: AsyncIOMotorClient | None = None
 db = None
@@ -116,13 +118,42 @@ class ResearchChatIn(BaseModel):
 
 class CompanionIn(BaseModel):
     message: str = Field(min_length=1, max_length=1200)
-    current_page: str = Field(default="reports", pattern=r"^(reports|research|care)$")
+    current_page: str = Field(default="reports", pattern=r"^(reports|timeline|research|medications|emergency|care)$")
     mode: str = Field(default="ask", pattern=r"^(ask|guide)$")
+    language: str = Field(default="en-IN", pattern=r"^(en-IN|hi-IN|kn-IN|te-IN|ta-IN)$")
+
+class MedicationIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    dose: str = Field(default="", max_length=80)
+    frequency: str = Field(default="", max_length=120)
+    times: list[str] = Field(default_factory=list, max_length=8)
+    instructions: str = Field(default="", max_length=500)
+
+    @field_validator("times")
+    @classmethod
+    def validate_times(cls, values):
+        if any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) for value in values):
+            raise ValueError("Reminder times must use 24-hour HH:MM format.")
+        return values
+
+class EmergencyProfileIn(BaseModel):
+    display_name: str = Field(default="", max_length=80)
+    allergies: str = Field(default="", max_length=1000)
+    conditions: str = Field(default="", max_length=1000)
+    medications: str = Field(default="", max_length=1000)
+    blood_group: str = Field(default="", pattern=r"^(|A\+|A-|B\+|B-|AB\+|AB-|O\+|O-)$")
+    emergency_contact: str = Field(default="", max_length=120)
+    share_fields: list[str] = Field(default_factory=list, max_length=6)
+
+EMERGENCY_FIELDS = {"display_name", "allergies", "conditions", "medications", "blood_group", "emergency_contact"}
 
 COMPANION_GUIDES = {
     "upload_report": "reports",
     "understand_report": "reports",
     "explore_research": "research",
+    "health_timeline": "timeline",
+    "medication_plan": "medications",
+    "emergency_profile": "emergency",
     "care_conversation": "care",
 }
 COMPANION_FIELDS = {
@@ -130,6 +161,10 @@ COMPANION_FIELDS = {
     "report_question": ("reports", "Ask a question about the selected report in plain language."),
     "research_report": ("research", "Optionally choose a saved report to use as research context."),
     "research_question": ("research", "Enter a general research question or finding. Do not enter names or identifiers."),
+    "medication_upload": ("medications", "Upload a prescription to create an unverified draft for you to compare with the original."),
+    "medication_name": ("medications", "Enter the medicine name exactly as it appears on the prescription."),
+    "emergency_profile": ("emergency", "Enter only emergency details you are comfortable saving to your private account."),
+    "emergency_share": ("emergency", "Select the exact details you want exposed through a temporary emergency link."),
     "doctor_username": ("care", "Enter the exact username of a registered doctor to start a private conversation."),
     "care_message": ("care", "Write a message for the doctor in your existing conversation."),
 }
@@ -204,13 +239,14 @@ async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
             "message": "I can guide you through MediMind, but I can’t interpret medical results or recommend care. Open My Reports for the report explanation, and discuss personal medical questions with a qualified clinician.",
             "action": "ANSWER", "section": None, "guide_id": None, "field_id": None,
         }
-    prompt = f"""You are MediMind Companion, a friendly guide to using the MediMind website.
+    language_name = {"en-IN": "English", "hi-IN": "Hindi", "kn-IN": "Kannada", "te-IN": "Telugu", "ta-IN": "Tamil"}[payload.language]
+    prompt = f"""You are MediMind Companion, a friendly guide to using the MediMind website. Reply in {language_name}.
 Answer questions about website navigation and form fields only. Do not interpret medical reports, diagnose, estimate disease likelihood, or recommend treatment. If asked for medical advice, explain that this assistant only guides website use and point the user to their report explanation or a qualified clinician.
 The user is on page: {payload.current_page}. Mode: {payload.mode}. User request: {payload.message}
 Return a JSON object only with keys: message, action, section, guide_id, field_id.
-action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. section must be reports, research, care, or null.
-Allowed guide_id values: upload_report, understand_report, explore_research, care_conversation.
-Allowed field_id values: report_upload, report_question, research_report, research_question, doctor_username, care_message.
+action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. section must be reports, timeline, research, medications, emergency, care, or null.
+Allowed guide_id values: upload_report, understand_report, explore_research, health_timeline, medication_plan, emergency_profile, care_conversation.
+Allowed field_id values: report_upload, report_question, research_report, research_question, medication_upload, medication_name, emergency_profile, emergency_share, doctor_username, care_message.
 Use NAVIGATE when the user asks to open a module. Use GUIDE when the user wants a step-by-step tour; choose only a guide_id that matches an existing module. Use FIELD_HELP when they ask what to enter in a known field; your message should explain the expected input and give a non-medical example if useful. Otherwise use ANSWER.
 When mode is guide, prefer GUIDE for a workflow request. Never claim to have uploaded, submitted, shared, deleted, or changed any data. Never generate code or arbitrary browser actions. Keep message under 600 characters.
 Available field descriptions: {json.dumps({key: value[1] for key, value in COMPANION_FIELDS.items()})}
@@ -227,7 +263,7 @@ Return only JSON."""
     section_value = data.get("section")
     guide_value = data.get("guide_id")
     field_value = data.get("field_id")
-    section = section_value if isinstance(section_value, str) and section_value in {"reports", "research", "care"} else None
+    section = section_value if isinstance(section_value, str) and section_value in {"reports", "timeline", "research", "medications", "emergency", "care"} else None
     guide_id = guide_value if isinstance(guide_value, str) and guide_value in COMPANION_GUIDES else None
     field_id = field_value if isinstance(field_value, str) and field_value in COMPANION_FIELDS else None
     if action == "GUIDE" and guide_id:
@@ -335,7 +371,7 @@ async def rare_research(payload: ResearchIn, user=Depends(current_user)):
     try: articles = await pubmed_search(query)
     except httpx.HTTPError: raise HTTPException(502, "PubMed could not be reached. Please try again shortly.")
     abstracts = "\n".join(f"PMID {a['pmid']} | {a['title']} | {a['journal']} {a['year']}\nAbstract: {a['abstract']}" for a in articles)
-    prompt = ("You are a cautious medical-literature explainer, not a diagnostic system. Review the provided report context and PubMed results. Return JSON only, with keys `summary` (plain-language overview including search limitations) and `possibilities` (array of at most 3 objects with `name`, `context`, `match_note`). Suggest only research topics genuinely named in the article titles and relevant to the provided findings. These are leads for discussion, never diagnoses or estimates of likelihood. If nonspecific findings or weak search results, use an empty array. Never suggest treatment.\nREPORT CONTEXT:\n" + source[:9000] + "\nPUBMED RESULTS:\n" + abstracts)
+    prompt = ("You are a cautious medical-literature explainer, not a diagnostic system. Review the report context and PubMed abstracts. Return JSON only: `summary` (plain-language overview and search limits), and `possibilities` (up to 3 objects with `name`, `context`, `match_note`, `evidence_for`, `evidence_against`, `missing_information`, `article_pmids`). Explain which reported findings and cited abstracts support or do not support further research; identify missing clinical details instead of guessing. Every evidence statement must be grounded in the supplied report or abstracts. Suggest only conditions genuinely named in the article titles and relevant to the findings. These are research leads, never diagnoses or estimates of likelihood. If evidence is weak or nonspecific, return an empty array. Never suggest treatment.\nREPORT CONTEXT:\n" + source[:9000] + "\nPUBMED RESULTS:\n" + abstracts)
     raw = await gemini(prompt, json_mode=True)
     try:
         import json
@@ -343,7 +379,8 @@ async def rare_research(payload: ResearchIn, user=Depends(current_user)):
         summary = str(structured.get("summary", "The literature search returned related articles, but this information cannot identify a condition."))
         possibilities = structured.get("possibilities", [])
         if not isinstance(possibilities, list): possibilities = []
-        possibilities = [{k: str(item.get(k, "")) for k in ("name", "context", "match_note")} for item in possibilities[:3] if isinstance(item, dict)]
+        keys = ("name", "context", "match_note", "evidence_for", "evidence_against", "missing_information")
+        possibilities = [{**{k: str(item.get(k, ""))[:900] for k in keys}, "article_pmids": [str(p) for p in item.get("article_pmids", []) if str(p) in {a["pmid"] for a in articles}]} for item in possibilities[:3] if isinstance(item, dict)]
     except (ValueError, TypeError):
         summary, possibilities = raw, []
     return {"query": query, "summary": summary, "possibilities": possibilities, "articles": articles, "disclaimer": "Research leads are not diagnosis."}
@@ -352,6 +389,109 @@ async def rare_research(payload: ResearchIn, user=Depends(current_user)):
 async def research_chat(payload: ResearchChatIn, user=Depends(current_user)):
     answer = await gemini("Explain this medical literature summary in plain language. Do not diagnose or overstate evidence.\nSUMMARY:\n" + payload.context + "\nQUESTION:\n" + payload.question)
     return {"answer": answer}
+
+@app.post("/api/health/twin")
+async def build_health_twin(user=Depends(current_user)):
+    cursor = database().reports.find({"owner_id": user["_id"]}).sort("created_at", -1).limit(20)
+    reports = [r async for r in cursor]
+    if not reports: raise HTTPException(422, "Upload a report first to build your health timeline.")
+    timeline = [{"filename": r["filename"], "date": r["created_at"].isoformat(), "report_id": str(r["_id"])} for r in reports]
+    context = "\n\n".join(f"FILE: {r['filename']} | DATE: {r['created_at'].date()}\n{r.get('extracted_text', '')[:5000]}" for r in reports)
+    prompt = ("Create a cautious longitudinal health-record summary from these reports. Do not diagnose, recommend treatment, invent numeric values or claim a trend unless the same measure is explicitly reported with comparable values/dates. Return JSON only with `summary` and `observations` (up to 6 objects with `label`, `note`, `evidence_files`, `kind`, where kind is trend, repeated, or context). Each evidence_files value must be an exact filename from the supplied records. If no comparable measurements exist, say so. Encourage clinician review.\nRECORDS:\n" + context[:24000])
+    raw = await gemini(prompt, json_mode=True)
+    try:
+        parsed = json.loads(raw)
+        summary = str(parsed.get("summary", "These records are gathered into one timeline for review.") )[:1800]
+        observations = []
+        known_files = {r["filename"] for r in reports}
+        for item in parsed.get("observations", [])[:6]:
+            if not isinstance(item, dict): continue
+            evidence = [str(x) for x in item.get("evidence_files", []) if str(x) in known_files]
+            observations.append({"label": str(item.get("label", "Record note"))[:100], "note": str(item.get("note", ""))[:800], "evidence_files": evidence, "kind": item.get("kind") if item.get("kind") in {"trend", "repeated", "context"} else "context"})
+    except (ValueError, TypeError, AttributeError):
+        summary, observations = "Your reports are gathered into one timeline. The AI summary could not be structured, so no trend was inferred.", []
+    return {"summary": summary, "timeline": timeline, "observations": observations, "disclaimer": "This timeline organizes records; it does not diagnose or recommend care."}
+
+@app.get("/api/medications")
+async def list_medications(user=Depends(current_user)):
+    cursor = database().medications.find({"owner_id": user["_id"]}).sort("created_at", -1).limit(100)
+    return [{"_id": str(m["_id"]), "name": m["name"], "dose": m.get("dose", ""), "frequency": m.get("frequency", ""), "times": m.get("times", []), "instructions": m.get("instructions", ""), "created_at": m["created_at"].isoformat()} async for m in cursor]
+
+@app.post("/api/medications")
+async def add_medication(payload: MedicationIn, user=Depends(current_user)):
+    doc = {"owner_id": user["_id"], **payload.model_dump(), "created_at": datetime.now(timezone.utc)}
+    result = await database().medications.insert_one(doc)
+    return {"_id": str(result.inserted_id), **payload.model_dump(), "created_at": doc["created_at"].isoformat()}
+
+@app.delete("/api/medications/{medication_id}")
+async def delete_medication(medication_id: str, user=Depends(current_user)):
+    result = await database().medications.delete_one({"_id": oid(medication_id), "owner_id": user["_id"]})
+    if not result.deleted_count: raise HTTPException(404, "Medication not found.")
+    return {"deleted": True}
+
+@app.post("/api/medications/scan")
+async def scan_prescription(file: UploadFile = File(...), user=Depends(current_user)):
+    del user
+    content = await file.read(MAX_UPLOAD + 1)
+    if len(content) > MAX_UPLOAD: raise HTTPException(413, f"Files must be {MAX_UPLOAD // 1024 // 1024} MB or smaller.")
+    extracted = await extract_report(file.filename or "prescription", file.content_type or "application/octet-stream", content)
+    prompt = ("Extract only clearly written medication details from this prescription. Return JSON only with `medications`: array of objects containing `name`, `dose`, `frequency`, `times` (array), `instructions`. Do not infer missing instructions or recommend any change. Use empty strings/lists for unreadable fields; keep at most 12. This is an unverified draft for the patient to review with a pharmacist/clinician.\nPRESCRIPTION TEXT:\n" + extracted[:12000])
+    try:
+        data = json.loads(await gemini(prompt, json_mode=True))
+        candidates = [{"name": str(m.get("name", ""))[:120], "dose": str(m.get("dose", ""))[:80], "frequency": str(m.get("frequency", ""))[:120], "times": [str(t)[:20] for t in m.get("times", [])[:8]], "instructions": str(m.get("instructions", ""))[:500]} for m in data.get("medications", [])[:12] if isinstance(m, dict) and str(m.get("name", "")).strip()]
+    except (ValueError, TypeError, AttributeError):
+        candidates = []
+    return {"medications": candidates, "notice": "Review every extracted detail against the original prescription before saving. MediMind does not recommend medication or dosage changes."}
+
+@app.get("/api/emergency/profile")
+async def get_emergency_profile(user=Depends(current_user)):
+    profile = await database().emergency_profiles.find_one({"owner_id": user["_id"]})
+    if not profile: return {"display_name": "", "allergies": "", "conditions": "", "medications": "", "blood_group": "", "emergency_contact": "", "share_fields": [], "share_active": False}
+    data = {k: profile.get(k, "") for k in ("display_name", "allergies", "conditions", "medications", "blood_group", "emergency_contact")}
+    data["share_fields"] = profile.get("share_fields", [])
+    share = profile.get("public_share") or {}
+    expiry = share.get("expires_at")
+    data["share_active"] = bool(expiry and expiry.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc))
+    return data
+
+@app.put("/api/emergency/profile")
+async def save_emergency_profile(payload: EmergencyProfileIn, user=Depends(current_user)):
+    if any(field not in EMERGENCY_FIELDS for field in payload.share_fields): raise HTTPException(422, "Unknown emergency sharing field.")
+    values = payload.model_dump()
+    await database().emergency_profiles.update_one({"owner_id": user["_id"]}, {"$set": {**values, "owner_id": user["_id"], "updated_at": datetime.now(timezone.utc)}, "$unset": {"public_share": ""}}, upsert=True)
+    return {"saved": True}
+
+@app.post("/api/emergency/share")
+async def create_emergency_share(user=Depends(current_user)):
+    profile = await database().emergency_profiles.find_one({"owner_id": user["_id"]})
+    if not profile or not profile.get("share_fields"): raise HTTPException(422, "Choose at least one emergency detail to share and save your profile first.")
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+    await database().emergency_profiles.update_one({"owner_id": user["_id"]}, {"$set": {"public_share": {"token_hash": hashlib.sha256(token.encode()).hexdigest(), "expires_at": expires, "fields": profile["share_fields"]}}})
+    frontend = (origins[0] if origins else "http://localhost:5173").rstrip("/")
+    public_url = f"{frontend}/?emergency={token}"
+    try:
+        import qrcode
+        qr = qrcode.make(public_url)
+        output = io.BytesIO(); qr.save(output, format="PNG")
+        qr_image = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()
+    except ImportError:
+        raise HTTPException(503, "QR creation is unavailable. Install backend dependencies, including qrcode[pil], and retry.")
+    return {"qr_image": qr_image, "expires_at": expires.isoformat(), "public_url": public_url}
+
+@app.post("/api/emergency/share/revoke")
+async def revoke_emergency_share(user=Depends(current_user)):
+    await database().emergency_profiles.update_one({"owner_id": user["_id"]}, {"$unset": {"public_share": ""}})
+    return {"revoked": True}
+
+@app.get("/api/public/emergency/{token}")
+async def public_emergency_profile(token: str):
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    profile = await database().emergency_profiles.find_one({"public_share.token_hash": token_hash, "public_share.expires_at": {"$gt": datetime.now(timezone.utc)}})
+    if not profile: raise HTTPException(404, "This emergency link has expired or was revoked.")
+    fields = profile["public_share"].get("fields", [])
+    allowed = EMERGENCY_FIELDS.intersection(fields)
+    return {key: profile.get(key, "") for key in allowed}
 
 @app.post("/api/conversations")
 async def create_conversation(payload: ConversationIn, user=Depends(current_user)):
