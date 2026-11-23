@@ -32,6 +32,11 @@ const GUIDES = {
       { target: 'care-continue', title: 'Continue to the conversation', body: 'After the username is verified, you can exchange saved text messages, voice notes and reports.' },
     ],
   },
+  doctor_care: {
+    section: 'care', title: 'Open a patient conversation', steps: [
+      { target: 'care-session-list', title: 'Choose a patient conversation', body: 'Select a conversation from your saved patient list. Messages stay in the conversation history.' },
+    ],
+  },
 };
 
 const FIELD_TARGETS = {

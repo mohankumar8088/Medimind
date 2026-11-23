@@ -181,6 +181,7 @@ COMPANION_GUIDES = {
     "medication_plan": "medications",
     "emergency_profile": "emergency",
     "care_conversation": "care",
+    "doctor_care": "care",
 }
 COMPANION_FIELDS = {
     "report_upload": ("reports", "Upload a report file using the supported file picker."),
@@ -262,12 +263,47 @@ async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperatur
     try: return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError): raise HTTPException(502, "Gemini returned no readable response.")
 
+COMPANION_MODULES = (
+    ("reports", re.compile(r"\b(?:my reports?|uploaded reports?|report (?:library|dashboard|page)|medical reports?|lab reports?|upload (?:a )?(?:medical )?report)\b", re.I), "My reports"),
+    ("timeline", re.compile(r"\b(?:health timeline|health history|report trends|timeline)\b", re.I), "Health timeline"),
+    ("research", re.compile(r"\b(?:rare[ -](?:diseases?|conditions?)|pubmed(?: research)?|research page|research module)\b", re.I), "Rare disease research"),
+    ("medications", re.compile(r"\b(?:medications?|medicines?|meds?|prescriptions?)\b|\b(?:medication module|medication page|medicine page|pills page)\b", re.I), "Medication plan"),
+    ("emergency", re.compile(r"\b(?:emergency profile|emergency information|emergency details|emergency qr|emergency contact profile)\b", re.I), "Emergency profile"),
+    ("care", re.compile(r"\b(?:care conversations?|doctor conversations?|patient conversations?|doctor chat|chat with (?:my )?doctor|messages? (?:to|with) (?:my )?doctor)\b", re.I), "Care conversations"),
+)
+
+def companion_navigation_intent(message: str, role: str, mode: str) -> dict[str, Any] | None:
+    """Handle common feature navigation deterministically before calling the LLM."""
+    for section, pattern, label in COMPANION_MODULES:
+        if not pattern.search(message):
+            continue
+        lower = message.lower()
+        explicit_navigation = bool(re.search(r"\b(?:open|go|navigate|take me|bring me|show me|switch to|visit|access)\b", lower))
+        workflow_request = bool(re.search(r"\b(?:how|help|guide|where|set(?:ting)? up|setup|create|start|add|upload|manage|use|review|understand|explain|want|need)\b", lower))
+        short_feature_request = len(message.split()) <= 4
+        if not explicit_navigation and not workflow_request and not (mode == "guide" and short_feature_request) and not short_feature_request:
+            continue
+        if role == "doctor" and section != "care":
+            return {"message": "Doctor accounts can access Care conversations only. I can help you open a patient conversation or use its message box.", "action": "ANSWER", "section": None, "guide_id": None, "field_id": None}
+        should_guide = mode == "guide" or workflow_request
+        guide_id = ("doctor_care" if role == "doctor" else "care_conversation") if section == "care" else {
+            "reports": "understand_report" if re.search(r"\b(?:understand|explain|review)\b", lower) else "upload_report", "timeline": "health_timeline", "research": "explore_research",
+            "medications": "medication_plan", "emergency": "emergency_profile",
+        }[section]
+        if should_guide:
+            return {"message": f"Sure — I’ll take you to {label} and walk you through it step by step.", "action": "GUIDE", "section": section, "guide_id": guide_id, "field_id": None}
+        return {"message": f"Opening {label}.", "action": "NAVIGATE", "section": section, "guide_id": None, "field_id": None}
+    return None
+
 @app.post("/api/companion/chat")
 async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
     doctor_scope = user.get("role") == "doctor"
     allowed_sections = {"care"} if doctor_scope else {"reports", "timeline", "research", "medications", "emergency", "care"}
     allowed_guides = {key for key, section in COMPANION_GUIDES.items() if section in allowed_sections and not (doctor_scope and key == "care_conversation")}
     allowed_fields = {key for key, (section, _) in COMPANION_FIELDS.items() if section in allowed_sections and not (doctor_scope and key == "doctor_username")}
+    intent = companion_navigation_intent(payload.message, user.get("role", "patient"), payload.mode)
+    if intent:
+        return intent
     medical_advice_patterns = (
         r"\bdiagnos\w*\b", r"\b(?:treat|treatment|medication|medicine|dosage|dose|cure)\b",
         r"\bwhat (?:disease|condition) do i have\b",

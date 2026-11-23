@@ -271,7 +271,7 @@ function CarePage({user,token,headers,reports,onReportUploaded}) {
           <div className="care-reassure"><div><AudioLines size={18}/></div><span><b>Text or voice, your choice</b><small>Share a message or record a voice note.</small></span><div><History size={18}/></div><span><b>Always here when you return</b><small>Your conversation history stays saved.</small></span></div>
         </>}
       </section>
-      <aside className="care-side">
+      <aside className="care-side" data-guide-target="care-session-list">
         <div className="history-heading"><div><h3>Your conversations</h3><p>{sessions.length} saved {sessions.length===1?'conversation':'conversations'}</p></div><History size={18}/></div>
         {sessions.length?sessions.map(s=><button className={`session-row ${sessionId===s._id?'selected':''}`} key={s._id} onClick={()=>load(s._id)}><div className="doctor-avatar small"><Stethoscope size={15}/></div><div><b>Dr. {s.doctor_username}</b><small>{s.last_message||'Conversation started'}</small></div><span className="session-date">{s.updated_at?new Date(s.updated_at).toLocaleDateString():''}</span></button>):<div className="history-empty"><div className="history-icon"><ClipboardList size={19}/></div><b>No conversations yet</b><p>When you connect with a doctor, your chats will appear here.</p></div>}
         <div className="care-side-note"><ShieldCheck size={15}/><span>Only you and your connected doctor can see these messages.</span></div>
