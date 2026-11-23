@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import io
 import json
+import logging
 import os
 import re
 import secrets
 import hashlib
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,7 +37,11 @@ JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "LOW").upper()
+if GEMINI_THINKING_LEVEL not in {"MINIMAL", "LOW", "MEDIUM", "HIGH"}:
+    GEMINI_THINKING_LEVEL = "LOW"
 MAX_UPLOAD = int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024
+logger = logging.getLogger("medimind.ai")
 app = FastAPI(title="MediMind API", version="1.0.0", description="Private, role-aware health report and care conversation API")
 origins = [x.strip() for x in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
@@ -42,10 +49,17 @@ security = HTTPBearer(auto_error=False)
 client: AsyncIOMotorClient | None = None
 db = None
 fs: AsyncIOMotorGridFSBucket | None = None
+gemini_http: httpx.AsyncClient | None = None
+pubmed_http: httpx.AsyncClient | None = None
 
 @app.on_event("startup")
 async def connect_db():
-    global client, db, fs
+    global client, db, fs, gemini_http, pubmed_http
+    gemini_http = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10, read=90, write=30, pool=10),
+        limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
+    )
+    pubmed_http = httpx.AsyncClient(timeout=20, headers={"User-Agent": "MediMind/1.0"})
     if MONGO_URI:
         client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         db = client[DB_NAME]
@@ -53,8 +67,15 @@ async def connect_db():
 
 @app.on_event("shutdown")
 async def close_db():
+    global gemini_http, pubmed_http
     if client:
         client.close()
+    if gemini_http:
+        await gemini_http.aclose()
+        gemini_http = None
+    if pubmed_http:
+        await pubmed_http.aclose()
+        pubmed_http = None
 
 def database():
     if db is None:
@@ -200,22 +221,33 @@ async def signin(payload: Signin):
         raise HTTPException(401, "Email/username or password is incorrect.")
     return {"access_token": make_token(user), "token_type": "bearer", "user": user_out(user)}
 
-async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperature: float = 0.2, json_mode: bool = False) -> str:
+async def gemini(prompt: str, media: tuple[str, bytes] | None = None, temperature: float = 0.2, json_mode: bool = False, thinking_level: str | None = None) -> str:
     if not GEMINI_API_KEY: raise HTTPException(503, "Gemini is not configured. Add GEMINI_API_KEY to the environment.")
+    if gemini_http is None:
+        raise HTTPException(503, "AI service is starting. Please retry in a moment.")
     parts: list[dict[str, Any]] = [{"text": prompt}]
     if media:
         mime, content = media
         parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(content).decode()}})
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    async with httpx.AsyncClient(timeout=95) as http:
-        generation = {"temperature": temperature}
-        if json_mode: generation["responseMimeType"] = "application/json"
-        try:
-            response = await http.post(url, json={"contents": [{"parts": parts}], "generationConfig": generation})
-        except httpx.TimeoutException as exc:
-            raise HTTPException(504, "Gemini took too long to respond. Please retry.") from exc
-        except httpx.RequestError as exc:
-            raise HTTPException(502, "Could not reach Gemini. Check the network connection and try again.") from exc
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    generation = {"temperature": temperature}
+    if GEMINI_MODEL.startswith("gemini-3"):
+        generation["thinkingConfig"] = {"thinkingLevel": thinking_level or GEMINI_THINKING_LEVEL}
+    if json_mode: generation["responseMimeType"] = "application/json"
+    started_at = time.perf_counter()
+    try:
+        response = await gemini_http.post(
+            url,
+            headers={"x-goog-api-key": GEMINI_API_KEY},
+            json={"contents": [{"parts": parts}], "generationConfig": generation},
+        )
+    except httpx.TimeoutException as exc:
+        logger.warning("Gemini timeout after %.2fs (model=%s)", time.perf_counter() - started_at, GEMINI_MODEL)
+        raise HTTPException(504, "Gemini took too long to respond. Please retry.") from exc
+    except httpx.RequestError as exc:
+        logger.warning("Gemini connection failed after %.2fs (model=%s)", time.perf_counter() - started_at, GEMINI_MODEL)
+        raise HTTPException(502, "Could not reach Gemini. Check the network connection and try again.") from exc
+    logger.info("Gemini response in %.2fs (model=%s status=%s)", time.perf_counter() - started_at, GEMINI_MODEL, response.status_code)
     if response.status_code >= 400:
         if response.status_code in (400, 404):
             detail = f"Gemini rejected the request ({response.status_code}). Check that GEMINI_MODEL is available to your API key."
@@ -351,21 +383,27 @@ async def report_chat(report_id: str, payload: ChatIn, user=Depends(patient_user
     return {"answer": answer}
 
 async def pubmed_search(query: str) -> list[dict[str, str]]:
+    if pubmed_http is None:
+        raise HTTPException(503, "Research service is starting. Please retry in a moment.")
     params = {"db":"pubmed", "term":query, "retmax":5, "sort":"relevance", "retmode":"json"}
-    async with httpx.AsyncClient(timeout=20, headers={"User-Agent":"MediMind/1.0"}) as http:
-        result = await http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params); result.raise_for_status()
-        ids = result.json().get("esearchresult", {}).get("idlist", [])
-        if not ids: return []
-        summary = await http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params={"db":"pubmed", "id":",".join(ids), "retmode":"json"}); summary.raise_for_status()
-        data = summary.json().get("result", {})
-        articles = [{"pmid": pid, "title": data.get(pid, {}).get("title", "Untitled article"), "journal": data.get(pid, {}).get("fulljournalname", "PubMed"), "year": data.get(pid, {}).get("pubdate", "")[:4], "abstract": ""} for pid in ids]
-        full = await http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi", params={"db":"pubmed", "id":",".join(ids), "retmode":"xml"}); full.raise_for_status()
-        for node in ET.fromstring(full.text).findall(".//PubmedArticle"):
-            pmid = node.findtext(".//PMID")
-            abstract = " ".join("".join(part.itertext()) for part in node.findall(".//Abstract/AbstractText"))
-            for article in articles:
-                if article["pmid"] == pmid: article["abstract"] = abstract[:5000]
-        return articles
+    result = await pubmed_http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params)
+    result.raise_for_status()
+    ids = result.json().get("esearchresult", {}).get("idlist", [])
+    if not ids: return []
+    ids_param = ",".join(ids)
+    summary, full = await asyncio.gather(
+        pubmed_http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params={"db":"pubmed", "id":ids_param, "retmode":"json"}),
+        pubmed_http.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi", params={"db":"pubmed", "id":ids_param, "retmode":"xml"}),
+    )
+    summary.raise_for_status(); full.raise_for_status()
+    data = summary.json().get("result", {})
+    articles = [{"pmid": pid, "title": data.get(pid, {}).get("title", "Untitled article"), "journal": data.get(pid, {}).get("fulljournalname", "PubMed"), "year": data.get(pid, {}).get("pubdate", "")[:4], "abstract": ""} for pid in ids]
+    for node in ET.fromstring(full.text).findall(".//PubmedArticle"):
+        pmid = node.findtext(".//PMID")
+        abstract = " ".join("".join(part.itertext()) for part in node.findall(".//Abstract/AbstractText"))
+        for article in articles:
+            if article["pmid"] == pmid: article["abstract"] = abstract[:5000]
+    return articles
 
 @app.post("/api/research/rare-disease")
 async def rare_research(payload: ResearchIn, user=Depends(patient_user)):
@@ -381,7 +419,7 @@ async def rare_research(payload: ResearchIn, user=Depends(patient_user)):
     except httpx.HTTPError: raise HTTPException(502, "PubMed could not be reached. Please try again shortly.")
     abstracts = "\n".join(f"PMID {a['pmid']} | {a['title']} | {a['journal']} {a['year']}\nAbstract: {a['abstract']}" for a in articles)
     prompt = ("You are a cautious medical-literature explainer, not a diagnostic system. Review the report context and PubMed abstracts. Return JSON only: `summary` (plain-language overview and search limits), and `possibilities` (up to 3 objects with `name`, `context`, `match_note`, `evidence_for`, `evidence_against`, `missing_information`, `article_pmids`). Explain which reported findings and cited abstracts support or do not support further research; identify missing clinical details instead of guessing. Every evidence statement must be grounded in the supplied report or abstracts. Suggest only conditions genuinely named in the article titles and relevant to the findings. These are research leads, never diagnoses or estimates of likelihood. If evidence is weak or nonspecific, return an empty array. Never suggest treatment.\nREPORT CONTEXT:\n" + source[:9000] + "\nPUBMED RESULTS:\n" + abstracts)
-    raw = await gemini(prompt, json_mode=True)
+    raw = await gemini(prompt, json_mode=True, thinking_level="MEDIUM")
     try:
         import json
         structured = json.loads(raw)

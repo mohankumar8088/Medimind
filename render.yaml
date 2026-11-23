@@ -15,5 +15,7 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.6-flash
+      - key: GEMINI_THINKING_LEVEL
+        value: MEDIUM
       - key: FRONTEND_ORIGIN
         sync: false

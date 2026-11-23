@@ -72,6 +72,7 @@ Vercel officially supports FastAPI as a Python Function, but Function execution 
 | `JWT_SECRET` | Yes | Signs seven-day authentication tokens |
 | `GEMINI_API_KEY` | Yes for AI | Gemini API key, server-side only |
 | `GEMINI_MODEL` | No | Defaults to `gemini-3.6-flash` |
+| `GEMINI_THINKING_LEVEL` | No | Gemini 3 reasoning level; defaults to `LOW` for quicker routine replies |
 | `FRONTEND_ORIGIN` | Yes in production | Allowed website origin(s), comma-separated |
 | `MAX_UPLOAD_MB` | No | Report upload limit; defaults to 10 MB |
 | `VITE_API_URL` | Frontend deploy | Public base URL ending in `/api` |
@@ -84,6 +85,10 @@ Vercel officially supports FastAPI as a Python Function, but Function execution 
 - `Dockerfile`, `render.yaml` — conventional Python service deployment
 
 The backend also exposes interactive API documentation at `/docs` when running locally.
+
+## AI response time
+
+The API reuses outbound connections to Gemini and PubMed, sets Gemini 3 reasoning to `LOW` for routine replies, and logs Gemini request duration and status without logging prompts, report contents, or API keys. The rare-disease evidence synthesis uses `MEDIUM` reasoning; its short PubMed query uses the faster default. PubMed metadata and abstracts are fetched concurrently after search results arrive. Use the Render service logs to see whether Gemini itself is slow. Rare-disease research still depends on a PubMed search followed by an evidence summary, so network/provider time remains part of that workflow.
 
 ## Important product and safety notes
 
