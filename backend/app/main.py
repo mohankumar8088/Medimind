@@ -195,6 +195,44 @@ COMPANION_FIELDS = {
     "doctor_username": ("care", "Enter the exact username of a registered doctor to start a private conversation."),
     "care_message": ("care", "Write a message for the doctor in your existing conversation."),
 }
+COMPANION_FIELDS.update({
+    "report_library": ("reports", "Select a saved report from the report list."),
+    "report_explanation": ("reports", "Read the plain-language explanation for the selected report."),
+    "research_search": ("research", "Start the PubMed search after choosing a report or entering a finding."),
+    "research_evidence_question": ("research", "Ask a plain-language question about the displayed research evidence."),
+    "medication_dose": ("medications", "Copy the prescribed dose exactly; MediMind does not choose or change doses."),
+    "medication_frequency": ("medications", "Enter the schedule exactly as written on the prescription."),
+    "medication_times": ("medications", "Optionally enter reminder times in 24-hour HH:MM format, separated by commas."),
+    "medication_instructions": ("medications", "Copy the prescription instructions exactly."),
+    "medication_save": ("medications", "Save the medicine only after checking every field against the prescription."),
+    "medication_reminders": ("medications", "Optionally enable browser reminders; they only run while MediMind is open."),
+    "medication_review_add": ("medications", "Review the extracted medicine details against the prescription, then add the draft."),
+    "emergency_name": ("emergency", "Enter the name you want available to someone helping you."),
+    "emergency_allergies": ("emergency", "List known allergies, or leave blank if none are known."),
+    "emergency_conditions": ("emergency", "Enter relevant medical conditions you want included in the profile."),
+    "emergency_medications": ("emergency", "List current medications you want available in an emergency."),
+    "emergency_blood_group": ("emergency", "Select a blood group only if you know it; otherwise leave it unprovided."),
+    "emergency_contact": ("emergency", "Enter an emergency contact name and phone number."),
+    "emergency_share_display_name": ("emergency", "Choose whether your name can appear on the emergency QR page."),
+    "emergency_share_allergies": ("emergency", "Choose whether known allergies can appear on the emergency QR page."),
+    "emergency_share_conditions": ("emergency", "Choose whether medical conditions can appear on the emergency QR page."),
+    "emergency_share_medications": ("emergency", "Choose whether current medications can appear on the emergency QR page."),
+    "emergency_share_blood_group": ("emergency", "Choose whether your blood group can appear on the emergency QR page."),
+    "emergency_share_emergency_contact": ("emergency", "Choose whether your emergency contact can appear on the QR page."),
+    "emergency_save": ("emergency", "Save your emergency profile. Saving changes revokes an active QR link."),
+    "emergency_create_link": ("emergency", "Create a temporary QR link after choosing the details to share."),
+    "emergency_revoke": ("emergency", "Revoke the currently active emergency QR link."),
+    "care_continue": ("care", "Continue after entering the registered doctor's exact username."),
+    "care_sessions": ("care", "Choose a patient conversation from the saved conversation list."),
+    "care_voice": ("care", "Record a voice note for the open conversation."),
+    "care_attach": ("care", "Open the attachment control to share a report in the conversation."),
+    "care_share_report_select": ("care", "Select a saved report to share with the connected doctor or patient."),
+    "care_share_report": ("care", "Share the selected saved report in the conversation."),
+    "care_upload_report": ("care", "Upload a report and share it in this conversation."),
+    "care_send": ("care", "Send the typed message or prepared voice note."),
+    "timeline_build": ("timeline", "Build the health timeline from your saved reports."),
+    "timeline_results": ("timeline", "Review the generated timeline and its source-linked observations."),
+})
 
 @app.get("/api/health")
 async def health():
@@ -272,6 +310,80 @@ COMPANION_MODULES = (
     ("care", re.compile(r"\b(?:care conversations?|doctor conversations?|patient conversations?|doctor chat|chat with (?:my )?doctor|messages? (?:to|with) (?:my )?doctor)\b", re.I), "Care conversations"),
 )
 
+COMPANION_FIELD_INTENTS = (
+    ("emergency_share", re.compile(r"\b(?:share fields|fields to share|sharing options|qr sharing|what (?:can|should) (?:the )?qr show)\b", re.I)),
+    ("emergency_share_display_name", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\bname\b|\bname.{0,30}\b(?:share|qr)\b", re.I)),
+    ("emergency_share_allergies", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\ballerg", re.I)),
+    ("emergency_share_conditions", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\bconditions?\b", re.I)),
+    ("emergency_share_medications", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\b(?:medication|medicine)", re.I)),
+    ("emergency_share_blood_group", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\bblood (?:group|type)\b", re.I)),
+    ("emergency_share_emergency_contact", re.compile(r"\b(?:share|show|qr|sharing).{0,30}\bcontact\b", re.I)),
+    ("emergency_name", re.compile(r"\b(?:name|full name|patient name)\b", re.I)),
+    ("emergency_allergies", re.compile(r"\b(?:known )?allerg(?:y|ies)\b", re.I)),
+    ("emergency_conditions", re.compile(r"\b(?:medical |known )?conditions?\b", re.I)),
+    ("emergency_medications", re.compile(r"\b(?:current (?:medications?|medicines?|meds?)|(?:medicines?|medications?|meds?) in (?:my )?emergency profile|emergency medication list)\b", re.I)),
+    ("emergency_blood_group", re.compile(r"\bblood (?:group|type)\b", re.I)),
+    ("emergency_contact", re.compile(r"\b(?:emergency )?contact(?: person)?\b|\bnext of kin\b", re.I)),
+    ("emergency_save", re.compile(r"\b(?:save|submit) (?:my )?(?:emergency )?profile\b", re.I)),
+    ("emergency_create_link", re.compile(r"\b(?:create|make|generate) (?:a )?(?:qr|emergency) (?:link|code)\b", re.I)),
+    ("emergency_revoke", re.compile(r"\b(?:revoke|disable|remove) (?:my )?(?:active )?(?:qr|emergency) (?:link|code)\b", re.I)),
+    ("report_upload", re.compile(r"\b(?:upload|choose|select) (?:a )?(?:medical )?report\b", re.I)),
+    ("report_library", re.compile(r"\b(?:saved |uploaded )?reports? (?:list|library|history)\b|\bopen (?:a )?report\b", re.I)),
+    ("report_explanation", re.compile(r"\b(?:report )?(?:summary|explanation)\b|\b(?:read|hear) (?:my )?report\b", re.I)),
+    ("report_question", re.compile(r"\b(?:report )?(?:question|ask about (?:my )?report)\b", re.I)),
+    ("research_report", re.compile(r"\b(?:choose|select) (?:a )?(?:saved )?report for research\b", re.I)),
+    ("research_question", re.compile(r"\b(?:research (?:question|finding)|finding|symptoms|search question|describe a finding)\b", re.I)),
+    ("research_search", re.compile(r"\b(?:search|start|run) (?:the )?(?:pubmed|literature|research)\b", re.I)),
+    ("research_evidence_question", re.compile(r"\b(?:ask|question|chat) (?:about )?(?:the )?(?:research )?evidence\b", re.I)),
+    ("timeline_build", re.compile(r"\b(?:build|create|compare) (?:my )?(?:health )?timeline\b", re.I)),
+    ("timeline_results", re.compile(r"\b(?:timeline )?(?:results|observations|sources)\b", re.I)),
+    ("medication_upload", re.compile(r"\b(?:scan|upload|choose) (?:a )?(?:medicine|medication|drug )?prescription\b", re.I)),
+    ("medication_name", re.compile(r"\b(?:medicine|medication|drug) name\b", re.I)),
+    ("medication_dose", re.compile(r"\b(?:dose|dosage)\b", re.I)),
+    ("medication_frequency", re.compile(r"\b(?:frequency|how often)\b", re.I)),
+    ("medication_times", re.compile(r"\b(?:reminder )?times?\b|\bschedule times\b", re.I)),
+    ("medication_instructions", re.compile(r"\b(?:prescription )?instructions\b", re.I)),
+    ("medication_save", re.compile(r"\b(?:save|add) (?:this )?(?:medicine|medication)\b", re.I)),
+    ("medication_reminders", re.compile(r"\b(?:enable|turn on|set up) (?:browser )?reminders?\b", re.I)),
+    ("medication_review_add", re.compile(r"\breview and add\b|\badd (?:the )?(?:scanned|extracted) medicine\b", re.I)),
+    ("doctor_username", re.compile(r"\b(?:doctor|doctor's) username\b|\busername of (?:my )?doctor\b", re.I)),
+    ("care_continue", re.compile(r"\b(?:continue|start) (?:the )?(?:doctor )?conversation\b", re.I)),
+    ("care_sessions", re.compile(r"\b(?:patient )?conversation list\b|\bsaved conversations\b|\bchoose a patient\b", re.I)),
+    ("care_message", re.compile(r"\b(?:message box|write a message|type a message|chat input)\b", re.I)),
+    ("care_voice", re.compile(r"\b(?:voice note|record audio|microphone|mic button)\b", re.I)),
+    ("care_attach", re.compile(r"\b(?:attachment|attach|paperclip)\b", re.I)),
+    ("care_share_report_select", re.compile(r"\b(?:choose|select) (?:a )?saved report to share\b", re.I)),
+    ("care_share_report", re.compile(r"\bshare (?:the )?(?:selected )?report\b", re.I)),
+    ("care_upload_report", re.compile(r"\bupload and share (?:a )?report\b", re.I)),
+    ("care_send", re.compile(r"\b(?:send|submit) (?:the )?(?:message|voice note)\b", re.I)),
+)
+
+def companion_field_intent(message: str, current_page: str, role: str) -> dict[str, Any] | None:
+    field_request = bool(re.search(
+        r"\b(?:field|where|highlight|focus|show|enter|fill|put|write|select|choose|upload|record|share|save|add|set|update|edit)\b|"
+        r"\b(?:how|what) (?:do i|should i) (?:enter|fill|put|write|select|choose)\b|"
+        r"\bhelp me (?:fill|find|choose|select|enter)\b|\btake me to\b|\bgo to\b",
+        message, re.I,
+    ))
+    matches = [(field_id, pattern, pattern.search(message)) for field_id, pattern in COMPANION_FIELD_INTENTS if pattern.search(message)]
+    matches.sort(key=lambda item: (COMPANION_FIELDS.get(item[0], (None,))[0] == current_page, item[2].end() - item[2].start()), reverse=True)
+    for field_id, _, _ in matches:
+        section, description = COMPANION_FIELDS[field_id]
+        if not field_request and len(message.split()) > 4:
+            continue
+        if role == "doctor" and (section != "care" or field_id in {"doctor_username", "care_continue"}):
+            return {"message": "Doctor accounts can use Care conversations only. Patient report, research, medication, and emergency fields are unavailable here.", "action": "ANSWER", "section": None, "guide_id": None, "field_id": None}
+        title = {
+            "emergency_name": "Name", "emergency_allergies": "Known allergies",
+            "emergency_conditions": "Medical conditions", "emergency_medications": "Current medications",
+            "emergency_blood_group": "Blood group", "emergency_contact": "Emergency contact",
+            "medication_name": "Medicine name", "medication_dose": "Dose",
+            "medication_frequency": "Frequency", "medication_times": "Reminder times",
+            "medication_instructions": "Prescription instructions", "doctor_username": "Doctor username",
+        }.get(field_id, field_id.replace("_", " ").title())
+        return {"message": f"This is the {title} field. {description}", "action": "FIELD_HELP", "section": section, "guide_id": None, "field_id": field_id}
+    return None
+
 def companion_navigation_intent(message: str, role: str, mode: str) -> dict[str, Any] | None:
     """Handle common feature navigation deterministically before calling the LLM."""
     for section, pattern, label in COMPANION_MODULES:
@@ -301,6 +413,9 @@ async def companion_chat(payload: CompanionIn, user=Depends(current_user)):
     allowed_sections = {"care"} if doctor_scope else {"reports", "timeline", "research", "medications", "emergency", "care"}
     allowed_guides = {key for key, section in COMPANION_GUIDES.items() if section in allowed_sections and not (doctor_scope and key == "care_conversation")}
     allowed_fields = {key for key, (section, _) in COMPANION_FIELDS.items() if section in allowed_sections and not (doctor_scope and key == "doctor_username")}
+    field_intent = companion_field_intent(payload.message, payload.current_page, user.get("role", "patient"))
+    if field_intent:
+        return field_intent
     intent = companion_navigation_intent(payload.message, user.get("role", "patient"), payload.mode)
     if intent:
         return intent
@@ -324,7 +439,7 @@ Return a JSON object only with keys: message, action, section, guide_id, field_i
 action must be one of ANSWER, NAVIGATE, GUIDE, FIELD_HELP. Choose a section only from this allowed set: {', '.join(sorted(allowed_sections))}.
 Allowed guide_id values: {', '.join(sorted(allowed_guides))}.
 Allowed field_id values: {', '.join(sorted(allowed_fields))}.
-Use NAVIGATE when the user asks to open a module. Use GUIDE when the user wants a step-by-step tour; choose only a guide_id that matches an existing module. Use FIELD_HELP when they ask what to enter in a known field; your message should explain the expected input and give a non-medical example if useful. Otherwise use ANSWER.
+Use NAVIGATE when the user asks to open a module. Use GUIDE when the user wants a step-by-step tour; choose only a guide_id that matches an existing module. Use FIELD_HELP when they ask to find, reach, or fill a specific field; recognize everyday synonyms, then choose only the matching allowed field_id and explain what goes there in plain language. Fields include name, known allergies, medical conditions, current medications, blood group, emergency contact, medicine name/dose/frequency/reminder times/instructions, report and research inputs, and care conversation controls. Otherwise use ANSWER.
 When mode is guide, prefer GUIDE for a workflow request. Never claim to have uploaded, submitted, shared, deleted, or changed any data. Never generate code or arbitrary browser actions. Keep message under 600 characters.
 Available field descriptions: {json.dumps({key: value[1] for key, value in COMPANION_FIELDS.items() if key in allowed_fields})}
 Return only JSON."""
